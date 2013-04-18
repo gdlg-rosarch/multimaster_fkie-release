@@ -1,6 +1,0 @@
-cmake_minimum_required(VERSION 2.4)
-if(CATKIN_TOPLEVEL)
-include(catkin.cmake)
-else()
-include(rosbuild.cmake)
-endif()
