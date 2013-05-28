@@ -21,5 +21,16 @@ install(
 install(
    PROGRAMS 
         ./README.rst
+        ./plugin.xml
    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
+
+
+install(
+   PROGRAMS
+        ./src/node_manager_fkie/MainWindow.ui
+        ./src/node_manager_fkie/MasterTab.ui
+        ./src/node_manager_fkie/PasswordInput.ui
+        ./src/node_manager_fkie/GUI.qrc
+   DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
 )
