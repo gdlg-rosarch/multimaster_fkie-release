@@ -5,7 +5,6 @@ import sys
 import shlex, subprocess
 
 import time
-import xmlrpclib
 import roslib; roslib.load_manifest('node_manager_fkie')
 import rospy
 import node_manager_fkie as nm
@@ -85,7 +84,7 @@ def packageName(dir):
     package = os.path.basename(dir)
     fileList = os.listdir(dir)
     for file in fileList:
-      if file == 'manifest.xml':
+      if file == 'manifest.xml' or file == 'package.xml':
           return package
     return packageName(os.path.dirname(dir))
   return None
@@ -176,7 +175,8 @@ def runNode(package, type, name, args, prefix='', repawn=False, masteruri=None):
   new_env = dict(os.environ)
   new_env['ROS_MASTER_URI'] = masteruri
   subprocess.Popen(shlex.split(str(' '.join(cmd_args))), cwd=cwd, env=new_env)
-  
+  if len(cmd) > 1:
+    rospy.logwarn('Multiple executables are found! The first one was started! Exceutables:\n%s', str(cmd))
 if __name__ == '__main__':
   main()
 

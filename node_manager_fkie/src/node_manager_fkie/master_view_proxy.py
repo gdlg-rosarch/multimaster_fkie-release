@@ -116,6 +116,7 @@ class MasterViewProxy(QtGui.QWidget):
     
     self.__echo_topics_dialogs = dict() # [topic name] = EchoDialog
     '''@ivar: stores the open EchoDialogs '''
+    self.__last_info_type = None # {Node, Topic, Service}
     self.__last_info_text = None
 
     self.default_cfg_handler = DefaultConfigHandler()
@@ -144,6 +145,7 @@ class MasterViewProxy(QtGui.QWidget):
     sm = self.masterTab.nodeTreeView.selectionModel()
     sm.selectionChanged.connect(self.on_node_selection_changed)
     self.masterTab.nodeTreeView.activated.connect(self.on_node_activated)
+    self.masterTab.nodeTreeView.clicked.connect(self.on_node_clicked)
 #    self.masterTab.nodeTreeView.setAcceptDrops(True)
 #    self.masterTab.nodeTreeWidget.setSortingEnabled(True)
 
@@ -160,6 +162,7 @@ class MasterViewProxy(QtGui.QWidget):
     sm = self.masterTab.topicsView.selectionModel()
     sm.selectionChanged.connect(self.on_topic_selection_changed)
     self.masterTab.topicsView.activated.connect(self.on_topic_activated)
+    self.masterTab.topicsView.clicked.connect(self.on_topic_clicked)
     self.masterTab.topicsView.setSortingEnabled(True)
 #    self.topic_proxyModel.filterAcceptsRow = _filterTopicsAcceptsRow
 
@@ -178,6 +181,7 @@ class MasterViewProxy(QtGui.QWidget):
     sm = self.masterTab.servicesView.selectionModel()
     sm.selectionChanged.connect(self.on_service_selection_changed)
     self.masterTab.servicesView.activated.connect(self.on_service_activated)
+    self.masterTab.servicesView.clicked.connect(self.on_service_clicked)
     self.masterTab.servicesView.setSortingEnabled(True)
 #    self.service_proxyModel.filterAcceptsRow = _filterServiceAcceptsRow
     
@@ -512,7 +516,7 @@ class MasterViewProxy(QtGui.QWidget):
     @return: C{True} if the given launch file is open
     @rtype: C{boolean}
     '''
-    return launchfiles.has_key(path)
+    return self.launchfiles.has_key(path)
 
   @property
   def launchfiles(self):
@@ -681,9 +685,9 @@ class MasterViewProxy(QtGui.QWidget):
     removed = list(set([c for c in self.__configs.keys() if isinstance(c, tuple)]) - set(default_cfgs))
     if removed:
       for r in removed:
-        host = nm.nameres().address(r[1])
+#        host = nm.nameres().address(r[1])
         self.node_tree_model.removeConfigNodes(r)
-        service = self.__master_info.getService(roslib.names.ns_join(r[0], 'list_nodes'))
+#        service = self.__master_info.getService(roslib.names.ns_join(r[0], 'list_nodes'))
         if r[2] == self.masteruri:
           self.remove_config_signal.emit(r[0])
         del self.__configs[r]
@@ -836,6 +840,11 @@ class MasterViewProxy(QtGui.QWidget):
     else:
       self.on_log_clicked()
 
+  def on_node_clicked(self, index):
+    self.__last_info_type = 'Node'
+    self.on_node_selection_changed(None, None, True)
+
+
   def on_topic_activated(self, index):
     '''
     @param index: The index of the activated topic
@@ -843,12 +852,20 @@ class MasterViewProxy(QtGui.QWidget):
     '''
     self.on_topic_echo_clicked()
 
+  def on_topic_clicked(self, index):
+    self.__last_info_type = 'Topic'
+    self.on_topic_selection_changed(None, None, True)
+
   def on_service_activated(self, index):
     '''
     @param index: The index of the activated service
     @type index: L{PySide.QtCore.QModelIndex}
     '''
     self.on_service_call_clicked()
+
+  def on_service_clicked(self, index):
+    self.__last_info_type = 'Service'
+    self.on_service_selection_changed(None, None, True)
 
   def on_host_inserted(self, item):
     if item.id == (self.masteruri, nm.nameres().getHostname(self.masteruri)):
@@ -890,7 +907,7 @@ class MasterViewProxy(QtGui.QWidget):
       result = ''.join([result, '</ul>'])
     return result
 
-  def on_node_selection_changed(self, selected, deselected):
+  def on_node_selection_changed(self, selected, deselected, force_emit=False):
     '''
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of host, group or node. 
@@ -936,12 +953,12 @@ class MasterViewProxy(QtGui.QWidget):
           text = ''.join(['<div>', text, '</div>'])
           name = node.name
 
-    if self.__last_info_text != text:
+    if self.__last_info_type == 'Node' and (self.__last_info_text != text or force_emit):
       self.__last_info_text = text
       self.description_signal.emit(name, text)
     self.updateButtons()
 
-  def on_topic_selection_changed(self, selected, deselected):
+  def on_topic_selection_changed(self, selected, deselected, force_emit=False):
     '''
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of selected topic
@@ -967,7 +984,7 @@ class MasterViewProxy(QtGui.QWidget):
           for f in mclass.__slots__:
             idx = mclass.__slots__.index(f)
             idtype = mclass._slot_types[idx]
-            base_type = roslib.msgs.base_msg_type(idtype)
+#            base_type = roslib.msgs.base_msg_type(idtype)
 #            primitive = "unknown"
 #            if base_type in roslib.msgs.PRIMITIVE_TYPES:
 #              primitive = "primitive"
@@ -983,9 +1000,9 @@ class MasterViewProxy(QtGui.QWidget):
         pass
       text = ''.join([text, '</dl>'])
       info_text = ''.join(['<div>', text, '</div>'])
-      if self.__last_info_text != info_text:
+      if self.__last_info_type == 'Topic' and (self.__last_info_text != info_text or force_emit):
         self.__last_info_text = info_text
-      self.description_signal.emit(topic.name, info_text)
+        self.description_signal.emit(topic.name, info_text)
   
   def _href_from_msgtype(self, type):
     result = type
@@ -993,7 +1010,7 @@ class MasterViewProxy(QtGui.QWidget):
       result = ''.join(['<a href="http://ros.org/doc/api/', type.replace('/', '/html/msg/'), '.html">', type, '</a>'])
     return result
 
-  def on_service_selection_changed(self, selected, deselected):
+  def on_service_selection_changed(self, selected, deselected, force_emit=False):
     '''
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of selected service
@@ -1017,7 +1034,7 @@ class MasterViewProxy(QtGui.QWidget):
       except:
         pass
       info_text = ''.join(['<div>', text, '</div>'])
-      if self.__last_info_text != info_text:
+      if self.__last_info_type == 'Service' and (self.__last_info_text != info_text or force_emit):
         self.__last_info_text = info_text
         self.description_signal.emit(service.name, info_text)
 
@@ -1143,6 +1160,8 @@ class MasterViewProxy(QtGui.QWidget):
                               ''.join(['Error while start ', node.name, '\n\nStart canceled!']),
                               str(se))
           return False
+        except nm.InteractionNeededError as ie:
+          raise
         except (Exception, nm.StartException) as e:
           print type(e)
           import traceback
@@ -1155,7 +1174,7 @@ class MasterViewProxy(QtGui.QWidget):
         try:
           nm.starter().callService(self.master_info.getService(config).uri, config, Task, [node.name])
         except (Exception, nm.StartException) as e:
-          socket_error =  (str(e).find("timeout") or str(e).find("113"))
+#          socket_error =  (str(e).find("timeout") or str(e).find("113"))
           rospy.logwarn("Error while call a service of node '%s': %s", node.name, str(e))
           raise DetailedError("Service error", 
                               ''.join(['Error while call a service of node ', node.name, '[', self.master_info.getService(config).uri, ']']),
@@ -1248,7 +1267,6 @@ class MasterViewProxy(QtGui.QWidget):
     dia.setWindowTitle('Start node on...')
     dia.resize(350,120)
     dia.setFocusField('host')
-    progressDialog = None
     if dia.exec_():
       try:
         params = dia.getKeywords()
@@ -1379,7 +1397,11 @@ class MasterViewProxy(QtGui.QWidget):
       # kill the node
       if not pid is None:
         try:
-          nm.starter().kill(self.getHostFromNode(node), pid, False)
+          self._progress_queue.add2queue(str(self._progress_queue.count()), 
+                                         'Kill nodes', 
+                                         nm.starter().kill, 
+                                         (self.getHostFromNode(node), pid, False))
+          self._progress_queue.start()
         except Exception as e:
           rospy.logwarn("Error while kill the node %s: %s", str(node.name), str(e))
           raise DetailedError("Kill error", 
@@ -1417,12 +1439,12 @@ class MasterViewProxy(QtGui.QWidget):
         for p in node.published:
           rospy.loginfo("unregister publisher '%s' [%s] from ROS master: %s", p, node.name, node.masteruri)
           master_multi.unregisterPublisher(node.name, p, node.uri)
-        for s in node.subscribed:
-          rospy.loginfo("unregister subscriber '%s' [%s] from ROS master: %s", p, node.name, node.masteruri)
-          master_multi.unregisterSubscriber(node.name, s, node.uri)
+        for t in node.subscribed:
+          rospy.loginfo("unregister subscriber '%s' [%s] from ROS master: %s", t, node.name, node.masteruri)
+          master_multi.unregisterSubscriber(node.name, t, node.uri)
         if not self.master_state is None:
           for s in node.services:
-            rospy.loginfo("unregister service '%s' [%s] from ROS master: %s", p, node.name, node.masteruri)
+            rospy.loginfo("unregister service '%s' [%s] from ROS master: %s", s, node.name, node.masteruri)
             service = self.master_info.getService(s)
             if not (service is None):
               master_multi.unregisterService(node.name, s, service.uri)
@@ -1592,7 +1614,9 @@ class MasterViewProxy(QtGui.QWidget):
       nodenames.append(n.name)
     try:
       host = nm.nameres().getHostname(self.masteruri)
-      path_on_host = nm.starter().copylogPath2Clipboards(host, nodenames)
+      socket.setdefaulttimeout(3)
+      path_on_host = nm.starter().copylogPath2Clipboards(host, nodenames, True)
+      socket.setdefaulttimeout(None)
       user = nm.ssh().USER_DEFAULT
       try:
         user = nm.ssh().SSH_AUTH[host]
@@ -2158,9 +2182,9 @@ class MasterViewProxy(QtGui.QWidget):
     if not root.isValid():
       return
     self.masterTab.nodeTreeView.expand(root)
-    firstChild = root.child(0, 0)
+#    firstChild = root.child(0, 0)
     last_row_index = len(self.node_tree_model.header)-1
-    lastChild = root.child(0, last_row_index)
+#    lastChild = root.child(0, last_row_index)
     i = 0
     selection = QtGui.QItemSelection()
     while root.child(i, 0).isValid():
@@ -2199,7 +2223,7 @@ class MasterViewProxy(QtGui.QWidget):
     for node in selectedNodes:
       try:
         result = ' '.join([result, node.name])
-      except Exception, e:
+      except Exception:
         pass
     QtGui.QApplication.clipboard().setText(result.strip())
 
@@ -2209,7 +2233,7 @@ class MasterViewProxy(QtGui.QWidget):
     for topic in selectedTopics:
       try:
         result = ' '.join([result, topic.name, topic.type])
-      except Exception, e:
+      except Exception:
         pass
     QtGui.QApplication.clipboard().setText(result.strip())
 
@@ -2219,7 +2243,7 @@ class MasterViewProxy(QtGui.QWidget):
     for service in selectedServices:
       try:
         result = ' '.join([result, service.name, service.type])
-      except Exception, e:
+      except Exception:
         pass
     QtGui.QApplication.clipboard().setText(result.strip())
 
@@ -2229,7 +2253,7 @@ class MasterViewProxy(QtGui.QWidget):
     for (key, value) in selectedParameter:
       try:
         result = ' '.join([result, key, str(value)])
-      except Exception, e:
+      except Exception:
         pass
     QtGui.QApplication.clipboard().setText(result.strip())
 
