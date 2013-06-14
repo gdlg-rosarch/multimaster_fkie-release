@@ -42,14 +42,23 @@ import xmlrpclib
 
 import node_manager_fkie as nm
 from common import get_ros_home, masteruri_from_ros, package_name
-try:
-  from launch_config import LaunchConfig
-except:
-  pass
 
 
 class StartException(Exception):
   pass
+
+class BinarySelectionRequest(Exception):
+  ''' '''
+  
+  def __init__(self, choices, error):
+    Exception.__init__(self)
+    self.choices = choices
+    self.error = error
+  
+  def __str__(self):
+    return "BinarySelectionRequest from "  + self.choices + "::" + repr(self.error)
+
+
 
 class StartHandler(object):
   '''
@@ -60,7 +69,7 @@ class StartHandler(object):
     pass
   
   @classmethod
-  def runNode(cls, node, launch_config, force2host=None, masteruri=None, auto_pw_request=False, user=None, pw=None):
+  def runNode(cls, node, launch_config, force2host=None, masteruri=None, auto_pw_request=False, user=None, pw=None, item=None):
     '''
     Start the node with given name from the given configuration.
     @param node: the name of the node (with name space)
@@ -71,6 +80,8 @@ class StartHandler(object):
     @type force2host: L{str} 
     @param masteruri: force the masteruri.
     @type masteruri: L{str} 
+    @param auto_pw_request: opens question dialog directly, use True only if the method is called from the main GUI thread
+    @type auto_pw_request: bool
     @raise StartException: if the screen is not available on host.
     @raise Exception: on errors while resolving host
     @see: L{node_manager_fkie.is_local()}
@@ -139,34 +150,41 @@ class StartHandler(object):
 
     if nm.is_local(host): 
       nm.screen().testScreen()
-      try:
-        cmd = roslib.packages.find_node(n.package, n.type)
-      except (Exception, roslib.packages.ROSPkgException) as e:
-        # multiple nodes, invalid package
-        raise StartException(''.join(["Can't find resource: ", str(e)]))
-      # handle diferent result types str or array of string
-      import types
-      if isinstance(cmd, types.StringTypes):
-        cmd = [cmd]
-      cmd_type = ''
-      if cmd is None or len(cmd) == 0:
-        raise StartException(' '.join([n.type, 'in package [', n.package, '] not found!\n\nThe package was created?\nIs the binary executable?\n']))
-      if len(cmd) > 1:
-        # Open selection for executables
-        try:
-          from python_qt_binding import QtGui
-          item, result = QtGui.QInputDialog.getItem(None, ' '.join(['Multiple executables', n.type, 'in', n.package]),
-                                            'Select an executable',
-                                            cmd, 0, False)
-          if result:
-            #open the selected screen
-            cmd_type = item
-          else:
-            return
-        except:
-          raise StartException('Multiple executables with same name in package found!')
+      if item:
+        cmd_type = item
       else:
-        cmd_type = cmd[0]
+        try:
+          cmd = roslib.packages.find_node(n.package, n.type)
+        except (Exception, roslib.packages.ROSPkgException) as e:
+          # multiple nodes, invalid package
+          raise StartException(''.join(["Can't find resource: ", str(e)]))
+        # handle diferent result types str or array of string
+        if isinstance(cmd, types.StringTypes):
+          cmd = [cmd]
+        cmd_type = ''
+        if cmd is None or len(cmd) == 0:
+          raise StartException(' '.join([n.type, 'in package [', n.package, '] not found!\n\nThe package was created?\nIs the binary executable?\n']))
+        if len(cmd) > 1:
+          if auto_pw_request:
+            # Open selection for executables, only if the method is called from the main GUI thread
+            try:
+              from python_qt_binding import QtGui
+              item, result = QtGui.QInputDialog.getItem(None, ' '.join(['Multiple executables', n.type, 'in', n.package]),
+                                                'Select an executable',
+                                                cmd, 0, False)
+              if result:
+                #open the selected screen
+                cmd_type = item
+              else:
+                return
+            except:
+              raise StartException('Multiple executables with same name in package found!')
+          else:
+            err = BinarySelectionRequest(cmd, 'Multiple executables')
+            raise nm.InteractionNeededError(err, 
+                                            cls.runNode, (node, launch_config, force2host, masteruri, auto_pw_request, user, pw))
+        else:
+          cmd_type = cmd[0]
       # determine the current working path, Default: the package of the node
       cwd = get_ros_home()
       if not (n.cwd is None):
@@ -263,7 +281,6 @@ class StartHandler(object):
     """
     import roslaunch
     import roslaunch.launch
-    import xmlrpclib
     param_server = xmlrpclib.ServerProxy(masteruri)
     p = None
     abs_paths = list() # tuples of (parameter name, old value, new value)
@@ -339,7 +356,7 @@ class StartHandler(object):
       return value, False, False, ''
 
   @classmethod
-  def runNodeWithoutConfig(cls, host, package, type, name, args=[], masteruri=None, auto_pw_request=True, user=None, pw=None):
+  def runNodeWithoutConfig(cls, host, package, type, name, args=[], masteruri=None, auto_pw_request=False, user=None, pw=None):
     '''
     Start a node with using a launch configuration.
     @param host: the host or ip to run the node
@@ -504,9 +521,9 @@ class StartHandler(object):
     '''
     rospy.loginfo("Call service %s[%s]: %s, %s", str(service), str(service_uri), str(service_type), str(service_args))
     from rospy.core import parse_rosrpc_uri, is_shutdown
-    from rospy.msg import args_kwds_to_message
+#    from rospy.msg import args_kwds_to_message
     from rospy.exceptions import TransportInitError, TransportException
-    from rospy.impl.tcpros_base import TCPROSTransport, TCPROSTransportProtocol, DEFAULT_BUFF_SIZE
+    from rospy.impl.tcpros_base import TCPROSTransport, DEFAULT_BUFF_SIZE#,TCPROSTransportProtocol
     from rospy.impl.tcpros_service import TCPROSServiceClient
     from rospy.service import ServiceException
     request = service_type._request_class()
@@ -584,7 +601,7 @@ class StartHandler(object):
     return result
 
   @classmethod
-  def copylogPath2Clipboards(self, host, nodes=[], auto_pw_request=True, user=None, pw=None):
+  def copylogPath2Clipboards(cls, host, nodes=[], auto_pw_request=False, user=None, pw=None):
     if nm.is_local(host):
       if len(nodes) == 1:
         return nm.screen().getScreenLogFile(node=nodes[0])
@@ -599,7 +616,7 @@ class StartHandler(object):
         else:
           raise StartException(str(''.join(['Get log path from "', host, '" failed:\n', error])))
       except nm.AuthenticationRequest as e:
-        raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
+        raise nm.InteractionNeededError(e, cls.copylogPath2Clipboards, (host, nodes, auto_pw_request))
 
   @classmethod
   def openLog(cls, nodename, host):
@@ -656,7 +673,7 @@ class StartHandler(object):
 
 
   @classmethod
-  def deleteLog(cls, nodename, host, auto_pw_request=True, user=None, pw=None):
+  def deleteLog(cls, nodename, host, auto_pw_request=False, user=None, pw=None):
     '''
     Deletes the log file associated with the given node.
     @param nodename: the name of the node (with name space)
@@ -682,8 +699,8 @@ class StartHandler(object):
         output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--delete_logs', nodename], user, pw, auto_pw_request)
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
-
-  def kill(self, host, pid, auto_pw_request=True, user=None, pw=None):
+  
+  def kill(self, host, pid, auto_pw_request=False, user=None, pw=None):
     '''
     Kills the process with given process id on given host.
     @param host: the name or address of the host, where the process must be killed.
@@ -697,9 +714,9 @@ class StartHandler(object):
     try:
       self._kill_wo(host, pid, auto_pw_request, user, pw)
     except nm.AuthenticationRequest as e:
-      raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
+      raise nm.InteractionNeededError(e, self.kill, (host, pid, auto_pw_request))
 
-  def _kill_wo(self, host, pid, auto_pw_request=True, user=None, pw=None):
+  def _kill_wo(self, host, pid, auto_pw_request=False, user=None, pw=None):
     rospy.loginfo("kill %s on %s", str(pid), host)
     if nm.is_local(host): 
       import signal
