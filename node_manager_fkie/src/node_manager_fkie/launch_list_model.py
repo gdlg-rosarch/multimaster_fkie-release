@@ -38,7 +38,6 @@ from python_qt_binding import QtGui
 
 import node_manager_fkie as nm
 from common import is_package, package_name
-from launch_config import LaunchConfig
 
 class LaunchListModel(QtCore.QAbstractListModel):
   '''
@@ -162,7 +161,8 @@ class LaunchListModel(QtCore.QAbstractListModel):
     @param item: the list item
     @type item: C{str}
     @return: path of the launch file or None
-    @rtype: C{str} or C{None}
+    @rtype: C{str
+    @raise Exception if no path to given item was found
     '''
     for pathItem, path, id in self.items:
       if item == pathItem:
@@ -173,7 +173,10 @@ class LaunchListModel(QtCore.QAbstractListModel):
         else:
           root_path, items = self._moveDown(path)
         self._setNewList((root_path, items))
-    return None
+    if id == LaunchListModel.RECENT_FILE or id == LaunchListModel.LAUNCH_FILE:
+      raise Exception(''.join(["No path to file '", str(item), "' found!"]))
+    else:
+      return None
 
 
   def setPath(self, path):
