@@ -30,11 +30,7 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-import time
-import socket
 import threading
-import xmlrpclib
-import random
 from python_qt_binding import QtCore
 from python_qt_binding import QtGui
 
@@ -115,8 +111,11 @@ class ProgressQueue(QtCore.QObject):
       #'print "PG finished delete all ok"
 
   def _progress_thread_error(self, id, title, msg, detailed_msg):
+    btns = (QtGui.QMessageBox.Ignore)
+    if len(self.__progress_queue) > 1:
+      btns = (QtGui.QMessageBox.Ignore|QtGui.QMessageBox.Abort)
     res = WarningMessageBox(QtGui.QMessageBox.Warning, title, msg, detailed_msg,
-                            buttons=(QtGui.QMessageBox.Ignore|QtGui.QMessageBox.Abort) ).exec_()
+                            buttons=btns ).exec_()
     if res == QtGui.QMessageBox.Abort:
       self.__progress_queue = []
       self._progress_frame.setVisible(False)
@@ -150,6 +149,18 @@ class ProgressQueue(QtCore.QObject):
         self._progress_thread_finished(id)
         return
       res = [req.request.choices[i] for i in items]
+      pt = ProgressThread(id, descr, req.method, (req.args+(res,)))
+      pt.finished_signal.connect(self._progress_thread_finished)
+      pt.error_signal.connect(self._progress_thread_error)
+      pt.request_interact_signal.connect(self._on_request_interact)
+      pt.start()
+    elif isinstance(req.request, nm.BinarySelectionRequest):
+      from select_dialog import SelectDialog
+      items = SelectDialog.getValue('Multiple executables', req.request.choices, True)
+      if not items:
+        self._progress_thread_finished(id)
+        return
+      res = items[0]
       pt = ProgressThread(id, descr, req.method, (req.args+(res,)))
       pt.finished_signal.connect(self._progress_thread_finished)
       pt.error_signal.connect(self._progress_thread_error)
