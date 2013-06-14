@@ -1,0 +1,12 @@
+Source: ros-groovy-multimaster-fkie
+Section: misc
+Priority: extra
+Maintainer: Alexander Tiderko <alexander.tiderko@gmail.com>
+Build-Depends: debhelper (>= 7.0.50~), ros-groovy-catkin
+Homepage: http://ros.org/wiki/multimaster_fkie
+Standards-Version: 3.9.2
+
+Package: ros-groovy-multimaster-fkie
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-groovy-default-cfg-fkie, ros-groovy-master-discovery-fkie, ros-groovy-master-sync-fkie, ros-groovy-multimaster-msgs-fkie, ros-groovy-node-manager-fkie
+Description: This package offers a set of ROS nodes to establish and manage a multimaster network. This requires no or minimal configuration. The changes are automatically detected and synchronized.
