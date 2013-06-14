@@ -34,7 +34,6 @@ import os
 import sys
 import shlex
 import subprocess
-import xmlrpclib
 import threading
 
 import roslib
@@ -326,20 +325,6 @@ class DefaultCfg(object):
     Returns the current description.
     '''
     return self.description_response
-#    result = ListDescriptionResponse()
-#    if req.node:
-#      if self.sensors.has_key(req.node):
-#        descr_list = self.sensors[req.node]
-#        for type, name, descr in descr_list:
-#          result.items.append(Description(Description.ID_SENSOR, req.node, type, name, descr))
-#    else:
-#      (type, name, descr) = self.robot_descr
-#      if type or name or descr:
-#        result.items.append(Description(Description.ID_ROBOT, '', type, name, descr))
-#      for node, descr_list in self.sensors.items():
-#        for type, name, descr in descr_list:
-#          result.items.append(Description(Description.ID_SENSOR, node, type, name, descr))
-    return result
   
   def loadParams(self):
     '''
@@ -369,7 +354,7 @@ class DefaultCfg(object):
     if n is None:
       raise StartException(''.join(["Node '", node, "' not found!"]))
     
-    env = n.env_args
+#    env = n.env_args
     prefix = n.launch_prefix if not n.launch_prefix is None else ''
     args = [''.join(['__ns:=', n.namespace]), ''.join(['__name:=', n.name])]
     if not (n.cwd is None):
@@ -379,10 +364,10 @@ class DefaultCfg(object):
     for remap in n.remap_args:
       args.append(''.join([remap[0], ':=', remap[1]]))
 
-    masteruri = self.masteruri
+#    masteruri = self.masteruri
     
-    if n.machine_name and not n.machine_name == 'localhost':
-      machine = self.roscfg.machines[n.machine_name]
+#    if n.machine_name and not n.machine_name == 'localhost':
+#      machine = self.roscfg.machines[n.machine_name]
       #TODO: env-loader support?
 #      if machine.env_args:
 #        env[len(env):] = machine.env_args
@@ -415,6 +400,8 @@ class DefaultCfg(object):
     popen_cmd = shlex.split(str(' '.join(cmd_args)))
     rospy.loginfo("run node '%s as': %s", node, str(' '.join(popen_cmd)))
     subprocess.Popen(popen_cmd, cwd=cwd)
+    if len(cmd) > 1:
+      raise StartException('Multiple executables are found! The first one was started! Exceutables:\n' + str(cmd))
 
   def get_ros_home(self):
     '''
