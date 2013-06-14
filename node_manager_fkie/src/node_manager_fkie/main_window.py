@@ -32,7 +32,6 @@
 
 import os
 import time
-import sys
 import xmlrpclib
 import threading
 
@@ -798,7 +797,7 @@ class MainWindow(QtGui.QMainWindow):
         if self.__icons[name] != self.__current_icon:
           icon = self.__icons[name]
           self.__current_icon = icon
-          self.ui.imageLabel.setPixmap(icon.pixmap(label.size()))
+          self.ui.imageLabel.setPixmap(icon.pixmap(self.ui.imageLabel.size()))
           self.ui.imageLabel.setToolTip(''.join(['<html><head></head><body><img src="', nm.ROBOTS_DIR, name, '.png', '" alt="', name,'"></body></html>']))
       elif self.__icons['default_pc'] != self.__current_icon:
         icon = self.__icons['default_pc']
@@ -901,7 +900,6 @@ class MainWindow(QtGui.QMainWindow):
     params = {'Host' : ('string', 'localhost'),
               'Network(0..99)' : ('int', '0'),
               'Optional Parameter' : ('list', params_optional) }
-    host = "a"
     dia = ParameterDialog(params)
     dia.setFilterVisible(False)
     dia.setWindowTitle('Start discovery')
@@ -960,7 +958,7 @@ class MainWindow(QtGui.QMainWindow):
                                      (str(hostname), 'master_discovery_fkie', 'master_discovery', 'master_discovery', args, None, False))
       self._progress_queue.start()
     except (Exception, nm.StartException), e:
-      rospy.logwarn("Error while start master_discovery for %s: %s", str(host), str(e))
+      rospy.logwarn("Error while start master_discovery for %s: %s", str(hostname), str(e))
       WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
                         'Error while start master_discovery',
                         str(e)).exec_()
@@ -974,9 +972,15 @@ class MainWindow(QtGui.QMainWindow):
     Tries to load the launch file, if one was activated.
     '''
     item, path, id = activated.model().items[activated.row()]
-    file = activated.model().getFilePath(item)
-    if not file is None:
-      self.loadLaunchFile(path)
+    try:
+      file = activated.model().getFilePath(item)
+      if not file is None:
+        self.loadLaunchFile(path)
+    except Exception, e:
+      rospy.logwarn("Error while load launch file %s: %s", str(item), str(e))
+      WarningMessageBox(QtGui.QMessageBox.Warning, "Load error", 
+                        ''.join(['Error while load launch file:\n', item]),
+                        str(e)).exec_()
 
   def on_xmlFileView_selection_changed(self, selected, deselected):
     '''
@@ -1063,7 +1067,6 @@ class MainWindow(QtGui.QMainWindow):
           # test for requerid args
           launchConfig = LaunchConfig(path)
           req_args = launchConfig.getArgs()
-          loaded = False
           if req_args:
             params = dict()
             arg_dict = launchConfig.argvToDict(req_args)
@@ -1126,7 +1129,6 @@ class MainWindow(QtGui.QMainWindow):
         dia.setWindowTitle('Start node on...')
         dia.resize(350,120)
         dia.setFocusField('host')
-        progressDialog = None
         if dia.exec_():
           try:
             params = dia.getKeywords()
@@ -1173,12 +1175,13 @@ class MainWindow(QtGui.QMainWindow):
       master.stop_nodes_by_name(nodes)
     
   def on_description_update(self, title, text):
-    self.ui.descriptionDock.setWindowTitle(title)
-    self.ui.descriptionTextEdit.setText(text)
-    if text:
-      self.ui.descriptionDock.raise_()
-    else:
-      self.ui.launchDock.raise_()
+    if self.sender() == self.currentMaster or not isinstance(self.sender(), MasterViewProxy):
+      self.ui.descriptionDock.setWindowTitle(title)
+      self.ui.descriptionTextEdit.setText(text)
+      if text:
+        self.ui.descriptionDock.raise_()
+      else:
+        self.ui.launchDock.raise_()
 
   def on_description_update_cap(self, title, text):
     self.ui.descriptionDock.setWindowTitle(title)
