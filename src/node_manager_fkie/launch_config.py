@@ -53,9 +53,6 @@ class LaunchConfig(QtCore.QObject):
   '''
   A class to handle the ROS configuration stored in launch file.
   '''
-  file_changed = QtCore.Signal(str, str)
-  '''@ivar: a signal to inform the receiver about the changes on
-  launch file or included file. ParameterB{:} (changed file, launch file)'''
   
   def __init__(self, launch_file, package=None, masteruri=None, argv=[]):
     '''
@@ -84,25 +81,14 @@ class LaunchConfig(QtCore.QObject):
     self.__reqTested = False
     self.global_param_done = [] # masteruri's where the global parameters are registered 
     self.hostname = nm.nameres().getHostname(self.__masteruri)
-    self.file_watcher = QtCore.QFileSystemWatcher()
-    self.file_watcher.fileChanged.connect(self.on_file_changed)
-    self.changed = {}
+    nm.file_watcher().add(self.__masteruri, self.__launchFile, self.getIncludedFiles(self.Filename))
+
 
   def __del__(self):
     # Delete to avoid segfault if the LaunchConfig class is destroyed recently 
     # after creation and xmlrpclib.ServerProxy process a method call.
-    del self.file_watcher
-
-  def on_file_changed(self, file):
-    '''
-    callback method, which is called by L{QtCore.QFileSystemWatcher} if the 
-    launch file or included files are changed. In this case 
-    L{LaunchConfig.file_changed} signal will be emitted.
-    '''
-    # to avoid to handle from QFileSystemWatcher fired the signal two times 
-    if (not self.changed.has_key(file) or (self.changed.has_key(file) and self.changed[file] + 0.05 < time.time())):
-      self.changed[file] = time.time()
-      self.file_changed.emit(file, self.__launchFile)
+#    del self.file_watcher
+    nm.file_watcher().rem(self.__masteruri, self.__launchFile)
 
   @property
   def masteruri(self):
@@ -142,6 +128,7 @@ class LaunchConfig(QtCore.QObject):
         return roslib.packages.find_resource(self.PackageName, self.LaunchName).pop()
       except Exception:
         raise LaunchConfigException(''.join(['launch file ', self.LaunchName, ' not found!']))
+    raise LaunchConfigException(''.join(['launch file ', self.__launchFile, ' not found!']))
 
   @property
   def LaunchName(self):
@@ -159,7 +146,8 @@ class LaunchConfig(QtCore.QObject):
     '''
     return self.__package
   
-  def _index(self, text, regexp_list):
+  @classmethod
+  def _index(cls, text, regexp_list):
     '''
     Searches in the given text for key indicates the including of a file and 
     return their index.
@@ -176,7 +164,8 @@ class LaunchConfig(QtCore.QObject):
         return index
     return -1
 
-  def interpretPath(self, path, pwd='.'):
+  @classmethod
+  def interpretPath(cls, path, pwd='.'):
     '''
     Tries to determine the path of the included file. The statement of 
     $(find 'package') will be resolved.
@@ -198,12 +187,13 @@ class LaunchConfig(QtCore.QObject):
         script = path[startIndex+1:endIndex].split()
         if len(script) == 2 and (script[0] == 'find'):
           pkg = roslib.packages.get_pkg_dir(script[1])
-          return ''.join([pkg, os.path.sep, path[endIndex+1:]])
+          return os.path.join(pkg, path[endIndex+1:])
     elif len(path) > 0 and path[0] != os.path.sep:
-      return ''.join([pwd, os.path.sep, path])
+      return os.path.join(pwd, path)
     return path
 
-  def getIncludedFiles(self, file):
+  @classmethod
+  def getIncludedFiles(cls, file):
     '''
     Reads the configuration file and searches for included files. This files
     will be returned in a list.
@@ -217,18 +207,18 @@ class LaunchConfig(QtCore.QObject):
     with open(file, 'r') as f:
       lines = f.readlines()
     for line in lines:
-      index = self._index(line, regexp_list)
+      index = cls._index(line, regexp_list)
       if index > -1:
         startIndex = line.find('"', index)
         if startIndex > -1:
           endIndex = line.find('"', startIndex+1)
           fileName = line[startIndex+1:endIndex]
           if len(fileName) > 0:
-            path = self.interpretPath(fileName, os.path.dirname(self.__launchFile))
+            path = cls.interpretPath(fileName, os.path.dirname(file))
             if os.path.isfile(path):
               result.add(path)
               if path.endswith('.launch'):
-                result.update(self.getIncludedFiles(path))
+                result.update(cls.getIncludedFiles(path))
     return list(result)
 
   def load(self, argv):
@@ -244,21 +234,19 @@ class LaunchConfig(QtCore.QObject):
     try:
       roscfg = roslaunch.ROSLaunchConfig()
       loader = roslaunch.XmlLoader()
+      self.argv = argv
       loader.load(self.Filename, roscfg, verbose=False, argv=argv)
       self.__roscfg = roscfg
 #      for m, k in self.__roscfg.machines.items():
 #        print m, k
-      files = self.file_watcher.files()
-      if files:
-        self.file_watcher.removePaths(files)
-      self.file_watcher.addPaths(self.getIncludedFiles(self.Filename))
+      nm.file_watcher().add(self.__masteruri, self.__launchFile, self.getIncludedFiles(self.Filename))
     except roslaunch.XmlParseException, e:
       test = list(re.finditer(r"environment variable '\w+' is not set", str(e)))
       message = str(e)
       if test:
         message = ''.join([message, '\n', 'environment substitution is not supported, use "arg" instead!'])
       raise LaunchConfigException(message)
-    return True
+    return True, self.argv
 
   def getArgs(self):
     '''
@@ -348,32 +336,36 @@ class LaunchConfig(QtCore.QObject):
                     result[m][ns] = dict()
                   result[m][ns][entry[0]] = { 'type' : ''.join([entry[1]]), 'images' : entry[2].split(), 'description' : self._decode(entry[3]), 'nodes' : [] }
       # get the capability nodes
-      for param, p in self.Roscfg.params.items():
-        if param.endswith('capability_group'):
-          param_node = roslib.names.namespace(param).rstrip(roslib.names.SEP)
-          if not param_node:
-            param_node = roslib.names.SEP
-          # get the nodes with groups
-          for item in self.Roscfg.nodes:
-            node_fullname = roslib.names.ns_join(item.namespace, item.name)
-            machine_name = item.machine_name if not item.machine_name is None and not item.machine_name == 'localhost' else ''
-            added = False
-            if node_fullname == param_node:
-              if not result.has_key(machine_name):
-                result[machine_name] = dict()
-              for (ns, groups) in result[machine_name].items():
-                if groups.has_key(p.value):
-                  groups[p.value]['nodes'].append(node_fullname)
-                  added = True
-                  break
-              if not added:
-                ns = ''.join([item.namespace])
-                # add new group in the namespace of the node
-                if not result[machine_name].has_key(ns):
-                  result[machine_name][ns] = dict()
-                if not result[machine_name][ns].has_key(p.value):
-                  result[machine_name][ns][p.value] = { 'type' : '', 'images': [], 'description' : '', 'nodes' : [] }
-                result[machine_name][ns][p.value]['nodes'].append(node_fullname)
+      for item in self.Roscfg.nodes:
+        node_fullname = roslib.names.ns_join(item.namespace, item.name)
+        machine_name = item.machine_name if not item.machine_name is None and not item.machine_name == 'localhost' else ''
+        added = False
+        cap_param = roslib.names.ns_join(node_fullname, 'capability_group')
+        cap_ns = node_fullname
+        #find the capability group parameter in namespace
+        while not self.Roscfg.params.has_key(cap_param) and cap_param.count(roslib.names.SEP) > 1:
+          cap_ns = roslib.names.namespace(cap_ns).rstrip(roslib.names.SEP)
+          if not cap_ns:
+            cap_ns = roslib.names.SEP
+          cap_param = roslib.names.ns_join(cap_ns, 'capability_group')
+        # if the parameter group parameter found, assign node to the group
+        if self.Roscfg.params.has_key(cap_param):
+          p = self.Roscfg.params[cap_param]
+          if not result.has_key(machine_name):
+            result[machine_name] = dict()
+          for (ns, groups) in result[machine_name].items():
+            if groups.has_key(p.value):
+              groups[p.value]['nodes'].append(node_fullname)
+              added = True
+              break
+          if not added:
+            ns = ''.join([item.namespace])
+            # add new group in the namespace of the node
+            if not result[machine_name].has_key(ns):
+              result[machine_name][ns] = dict()
+            if not result[machine_name][ns].has_key(p.value):
+              result[machine_name][ns][p.value] = { 'type' : '', 'images': [], 'description' : '', 'nodes' : [] }
+            result[machine_name][ns][p.value]['nodes'].append(node_fullname)
     return result
   
   def argvToDict(self, argv):
