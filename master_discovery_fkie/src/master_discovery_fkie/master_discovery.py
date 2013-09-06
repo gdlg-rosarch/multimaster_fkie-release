@@ -339,7 +339,7 @@ class Discoverer(threading.Thread):
     # test the reachability of the ROS master 
     local_addr = roslib.network.get_local_address()
     if (local_addr in ['localhost', '127.0.0.1']):
-      sys.exit("'%s' is not reachable for other systems. Change the ROS_MASTER_URI!", local_addr)
+      sys.exit("'%s' is not reachable for other systems. Change the ROS_MASTER_URI!"% local_addr)
     
     self.mcast_port = mcast_port
     self.mcast_group = mcast_group
@@ -447,7 +447,7 @@ class Discoverer(threading.Thread):
     '''
     The method test periodically the state of the ROS master. The new state will
     be published as heartbeat messages.
-    :see: :mod:`master_discovery_fkie.master_monitor.MasterMonitor.checkState()`
+    :mod:`master_discovery_fkie.master_monitor.MasterMonitor.checkState()`
     '''
     import os
     try_count = 0
@@ -554,7 +554,7 @@ class Discoverer(threading.Thread):
     '''
     :return: parses the hearbeat message and return a tuple of
             version and values corresponding with current version of message.
-            :see: :mod:`master_discovery_fkie.master_discovery.Discoverer.HEARTBEAT_FMT`
+            :mod:`master_discovery_fkie.master_discovery.Discoverer.HEARTBEAT_FMT`
     
     :raise: Exception on invalid message
     
