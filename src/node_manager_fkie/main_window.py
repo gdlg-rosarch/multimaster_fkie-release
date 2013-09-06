@@ -59,11 +59,13 @@ from .parameter_dialog import ParameterDialog
 from .progress_queue import ProgressQueue, ProgressThread
 from .screen_handler import ScreenHandler
 from .sync_dialog import SyncDialog
-from common import masteruri_from_ros, package_name
+from .common import masteruri_from_ros, package_name
+from .select_dialog import SelectDialog
 
 import node_manager_fkie as nm
 
 from multimaster_msgs_fkie.msg import LinkState, LinkStatesStamped, MasterState#, ROSMaster, SyncMasterInfo, SyncTopicInfo
+from master_discovery_fkie.common import resolve_url
 #from master_discovery_fkie.srv import DiscoverMasters, GetSyncInfo
 
 
@@ -80,9 +82,14 @@ class MainWindow(QtGui.QMainWindow):
     QtGui.QMainWindow.__init__(self)
     restricted_to_one_master = False
     self._finished = False
+    self._history_selected_robot = ''
     self.__icons = {'default_pc' : QtGui.QIcon(''.join([':/icons/crystal_clear_miscellaneous.png']))} # (masnter name : QIcon)
     self.__current_icon = None
     self.__current_master_label_name = None
+    try:
+      self.__current_path = os.environ('HOME')
+    except:
+      self.__current_path = os.getcwd()
     #self.setAttribute(QtCore.Qt.WA_AlwaysShowToolTips, True)
     #load the UI formular for the main window
 #    loader = QtUiTools.QUiLoader()
@@ -149,6 +156,10 @@ class MainWindow(QtGui.QMainWindow):
     sm.selectionChanged.connect(self.on_xmlFileView_selection_changed)
     self.ui.refreshXmlButton.clicked.connect(self.on_refresh_xml_clicked)
     self.ui.editXmlButton.clicked.connect(self.on_edit_xml_clicked)
+    self.ui.newXmlButton.clicked.connect(self.on_new_xml_clicked)
+    self.ui.openXmlButton.clicked.connect(self.on_open_xml_clicked)
+    #self.ui.newXmlButton.setVisible(False)
+    self.ui.transferButton.clicked.connect(self.on_transfer_file_clicked)
     self.ui.loadXmlButton.clicked.connect(self.on_load_xml_clicked)
     self.ui.loadXmlAsDefaultButton.clicked.connect(self.on_load_as_default)
 
@@ -176,6 +187,9 @@ class MainWindow(QtGui.QMainWindow):
     self.stats_topic = MasterStatisticTopic()
     self.stats_topic.stats_signal.connect(self.on_conn_stats_updated)
     
+    nm.file_watcher().file_changed.connect(self.on_configfile_changed)
+    self.__in_question = list()
+
     ############################################################################
     ############################################################################
     ############################################################################
@@ -204,8 +218,7 @@ class MainWindow(QtGui.QMainWindow):
     start_menu.addAction(self.loadDeafaultAtHostAct)
     self.ui.loadXmlAsDefaultButton.setMenu(start_menu)
 
-    
-    self.default_load_launch = os.path.abspath(args[1]) if len(args) >= 2 else ''
+    self.default_load_launch = os.path.abspath(resolve_url(args[1])) if len(args) >= 2 else ''
     if self.default_load_launch:
       if os.path.isdir(self.default_load_launch):
         self.ui.xmlFileView.model().setPath(self.default_load_launch)
@@ -224,6 +237,9 @@ class MainWindow(QtGui.QMainWindow):
 
     self.editor_dialogs  = dict() # [file] = XmlEditor
     '''@ivar: stores the open XmlEditor '''
+    
+    
+    self.ui.hideDocksButton.clicked.connect(self.on_hide_docks_toggled)
 
     # since the is_local method is threaded for host names, call it to cache the localhost
     nm.is_local("localhost")
@@ -255,42 +271,51 @@ class MainWindow(QtGui.QMainWindow):
     self._con_tries = dict()
     self._subscribe()
 
-  def createSlider(self):
-    slider = QtGui.QSlider()
-    palette = QtGui.QPalette()
-    brush = QtGui.QBrush(QtGui.QColor(59, 223, 18))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Active, QtGui.QPalette.Button, brush)
-    brush = QtGui.QBrush(QtGui.QColor(59, 223, 18))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Inactive, QtGui.QPalette.Button, brush)
-    brush = QtGui.QBrush(QtGui.QColor(59, 223, 18))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Disabled, QtGui.QPalette.Button, brush)
-    #red
-    palette = QtGui.QPalette()
-    brush = QtGui.QBrush(QtGui.QColor(212, 0, 0))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Active, QtGui.QPalette.Button, brush)
-    brush = QtGui.QBrush(QtGui.QColor(212, 0, 0))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Inactive, QtGui.QPalette.Button, brush)
-    brush = QtGui.QBrush(QtGui.QColor(212, 0, 0))
-    brush.setStyle(QtCore.Qt.SolidPattern)
-    palette.setBrush(QtGui.QPalette.Disabled, QtGui.QPalette.Button, brush)
+  def on_hide_docks_toggled(self, checked):
+    if self.ui.dockWidgetArea(self.ui.launchDock) == QtCore.Qt.LeftDockWidgetArea:
+      self.ui.launchDock.setVisible(not checked)
+    if self.ui.dockWidgetArea(self.ui.descriptionDock) == QtCore.Qt.LeftDockWidgetArea:
+      self.ui.descriptionDock.setVisible(not checked)
+    if self.ui.dockWidgetArea(self.ui.helpDock) == QtCore.Qt.LeftDockWidgetArea:
+      self.ui.helpDock.setVisible(not checked)
+    if self.ui.dockWidgetArea(self.ui.networkDock) == QtCore.Qt.LeftDockWidgetArea:
+      self.ui.networkDock.setVisible(not checked)
+    self.ui.hideDocksButton.setArrowType(QtCore.Qt.RightArrow if checked else QtCore.Qt.LeftArrow)
+    historyFile = os.path.join(nm.CFG_PATH, 'view.history')
+    with open(historyFile, 'w') as f:
+      f.write(''.join(['selected_robot:=', self._history_selected_robot, '\n']))
+      f.write(''.join(['show_left_docks:=', 'false' if checked else 'true', '\n']))
+      f.write(''.join(['area_launch_dock:=', str(self.ui.dockWidgetArea(self.ui.launchDock)), '\n']))
+      f.write(''.join(['area_descr_dock:=', str(self.ui.dockWidgetArea(self.ui.descriptionDock)), '\n']))
 
-    slider.setPalette(palette)
-    slider.setMinimum(1)
-    slider.setMaximum(2)
-    slider.setPageStep(1)
-    slider.setOrientation(QtCore.Qt.Horizontal)
-#    slider.setInvertedAppearance(True)
-#    slider.setInvertedControls(True)
-#    slider.setTickPosition(QtGui.QSlider.TicksBelow)
-    slider.actionTriggered .connect(self.was)
-    return slider
-
-
+  def read_view_history(self):
+    show_left_docks = True
+    area_launch_dock = 1
+    area_descr_dock = 1
+    historyFile = os.path.join(nm.CFG_PATH, 'view.history')
+    with open(historyFile, 'r') as f:
+      line = f.readline()
+      while line:
+        if line:
+          line = line.strip()
+          if line:
+            key, sep, value = line.partition(':=')
+            if sep:
+              if key == 'selected_robot':
+                self._history_selected_robot = value
+              if key == 'show_left_docks':
+                show_left_docks = (value=='true')
+              if key == 'area_launch_dock':
+                area_launch_dock = int(value)
+              if key == 'area_descr_dock':
+                area_descr_dock = int(value)
+        line = f.readline()
+    if area_launch_dock != QtCore.Qt.LeftDockWidgetArea:
+      self.ui.addDockWidget(area_launch_dock, self.ui.launchDock)
+    if area_descr_dock != QtCore.Qt.LeftDockWidgetArea:
+      self.ui.addDockWidget(area_descr_dock, self.ui.descriptionDock)
+    self.ui.hideDocksButton.setChecked(not show_left_docks)
+    self.on_hide_docks_toggled(not show_left_docks)
 
   def on_currentChanged_tab(self, index):
     pass
@@ -317,6 +342,7 @@ class MainWindow(QtGui.QMainWindow):
       for key, master in self.masters.iteritems():
         master.stop()
       self.own_master_monitor.stop()
+      self.master_timecheck_timer.stop()
       print "Mainwindow finished!"
 
   def getMasteruri(self):
@@ -377,7 +403,7 @@ class MainWindow(QtGui.QMainWindow):
                                     os.path.basename(self.default_load_launch).replace('.launch',''), 
                                     roslib.names.SEP, 'default_cfg'])
               self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
-                                             'Start default config '+str(host), 
+                                             'start default config '+str(host), 
                                              nm.starter().runNodeWithoutConfig, 
                                              (host, 'default_cfg_fkie', 'default_cfg', node_name, args, masteruri, False))
               self._progress_queue_cfg.start()
@@ -445,9 +471,10 @@ class MainWindow(QtGui.QMainWindow):
       for uri in self.masters.keys():
         master = self.masters[uri]
         if nm.is_local(nm.nameres().getHostname(uri)):
-          self.currentMaster = master
-          self.stackedLayout.setCurrentWidget(master)
-          self.on_master_timecheck()
+          if not self._history_selected_robot or master.mastername == self._history_selected_robot:
+            self.currentMaster = master
+            self.stackedLayout.setCurrentWidget(master)
+            self.on_master_timecheck()
         else:
           if not master.master_state is None:
             self.master_model.removeMaster(master.master_state.name)
@@ -574,16 +601,20 @@ class MainWindow(QtGui.QMainWindow):
 #          cputime = cputimes[0] + cputimes[1] - cputime_init
 #          print master.master_state.name, cputime
           if not master.master_info is None:
-            if nm.is_local(nm.nameres().getHostname(master.master_info.masteruri)) or self.restricted_to_one_master:
+            if self._history_selected_robot == minfo.mastername and self._history_selected_robot == master.mastername and self.currentMaster != master:
+              self.currentMaster = master
+              self.stackedLayout.setCurrentWidget(master)
+              self.on_master_timecheck()
+            elif nm.is_local(nm.nameres().getHostname(master.master_info.masteruri)) or self.restricted_to_one_master:
               if new_info:
                 has_discovery_service = self.hasDiscoveryService(minfo)
                 if not self.own_master_monitor.isPaused() and has_discovery_service:
                   self._subscribe()
-                elif self.currentMaster is None:
+                elif self.currentMaster is None and (not self._history_selected_robot or self._history_selected_robot == minfo.mastername):
                   self.currentMaster = master
                   self.stackedLayout.setCurrentWidget(master)
                   self.on_master_timecheck()
-  
+
             # update the list view, whether master is synchronized or not
             if master.master_info.masteruri == minfo.masteruri:
               self.master_model.setChecked(master.master_state.name, not minfo.getNodeEndsWith('master_sync') is None)
@@ -659,6 +690,7 @@ class MainWindow(QtGui.QMainWindow):
         cmd = 'rqt_console'
       except:
         pass
+      rospy.loginfo("start rxconsole: %s", cmd)
       ps = subprocess.Popen([cmd], env=env)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
@@ -676,6 +708,7 @@ class MainWindow(QtGui.QMainWindow):
         cmd = 'rqt_graph'
       except:
         pass
+      rospy.loginfo("start rxgraph: %s", cmd)
       ps = subprocess.Popen([cmd], env=env)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
@@ -689,13 +722,23 @@ class MainWindow(QtGui.QMainWindow):
       if self._sync_dialog.exec_():
         try:
           host = nm.nameres().getHostname(self.currentMaster.masteruri)
+          if not self._sync_dialog.interface_filename is None:
+            # copy the interface file to remote machine
+            self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
+                                           'Transfer sync interface '+str(host), 
+                                           nm.starter().transfer_files, 
+                                           (str(host), self._sync_dialog.interface_filename))
           self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
                                          'Start sync on '+str(host), 
                                          nm.starter().runNodeWithoutConfig, 
                                          (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(self.currentMaster.masteruri), True))
           self._progress_queue_sync.start()
         except:
-          pass
+          import traceback
+          WarningMessageBox(QtGui.QMessageBox.Warning, "Start sync error", 
+                            "Error while start sync node",
+                            str(traceback.format_exc())).exec_()
+          
     self.ui.syncButton.setEnabled(True)
 
   def on_sync_released(self):
@@ -712,6 +755,16 @@ class MainWindow(QtGui.QMainWindow):
       self.ui.syncButton.setEnabled(False)
       if not self.currentMaster is None:
         if self.ui.syncButton.isChecked():
+          # ask the user to start the master_sync with loaded launch file
+          if not self.currentMaster.master_info is None:
+            node = self.currentMaster.getNode('/master_sync')
+            if node:
+              ret = QtGui.QMessageBox.question(self, 'Start synchronization','Start the synchronization using loaded configuration?\n `No` starts the master_sync with default parameter.', QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+              if ret == QtGui.QMessageBox.Yes:
+                self.currentMaster.start_nodes([node[0]])
+                return
+
+          # start the master sync with default settings
           sync_args = []
           sync_args.append(''.join(['_interface_url:=', "'.'"]))
           sync_args.append(''.join(['_sync_topics_on_demand:=', 'False']))
@@ -726,7 +779,7 @@ class MainWindow(QtGui.QMainWindow):
           try:
             host = nm.nameres().getHostname(self.currentMaster.masteruri)
             self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
-                                           'Start sync on '+str(host), 
+                                           'start sync on '+str(host), 
                                            nm.starter().runNodeWithoutConfig, 
                                            (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', sync_args, str(self.currentMaster.masteruri), False))
             self._progress_queue_sync.start()
@@ -752,7 +805,7 @@ class MainWindow(QtGui.QMainWindow):
         self.showMasterName(masteruri, name, 'Try to get info!!!', master.master_state.online)
     else:
       self.showMasterName('', 'No robot selected', None, False)
-    if (time.time() - self._refresh_time > 15.0):
+    if (time.time() - self._refresh_time > 30.0):
       masteruri = self.getMasteruri()
       if not masteruri is None:
         master = self.getMaster(masteruri)
@@ -854,6 +907,7 @@ class MainWindow(QtGui.QMainWindow):
         item = self.master_model.itemFromIndex(selected)
         if not item is None:
           self.currentMaster = self.getMaster(item.master.uri)
+          self._history_selected_robot = item.master.name
           self.stackedLayout.setCurrentWidget(self.currentMaster)
           self.on_master_timecheck()
           if not self.currentMaster.master_info is None and not self.restricted_to_one_master:
@@ -929,7 +983,7 @@ class MainWindow(QtGui.QMainWindow):
           args.append(''.join(['_static_hosts:=[', static_hosts, ']']))
           #TODO: remove the name parameter from the ROS parameter server
           self._progress_queue.add2queue(str(self._progress_queue.count()), 
-                                         'Start discovering on '+str(hostname), 
+                                         'start discovering on '+str(hostname), 
                                          nm.starter().runNodeWithoutConfig, 
                                          (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False))
           self._progress_queue.start()
@@ -953,7 +1007,7 @@ class MainWindow(QtGui.QMainWindow):
       if network < 100 and network >= 0:
         args.append(''.join(['_mcast_port:=', str(11511 + int(network))]))
       self._progress_queue.add2queue(str(self._progress_queue.count()), 
-                                     'Start discovering on '+str(hostname), 
+                                     'start discovering on '+str(hostname), 
                                      nm.starter().runNodeWithoutConfig, 
                                      (str(hostname), 'master_discovery_fkie', 'master_discovery', 'master_discovery', args, None, False))
       self._progress_queue.start()
@@ -973,7 +1027,7 @@ class MainWindow(QtGui.QMainWindow):
     '''
     item, path, id = activated.model().items[activated.row()]
     try:
-      file = activated.model().getFilePath(item)
+      file = activated.model().expandItem(item, path)
       if not file is None:
         self.loadLaunchFile(path)
     except Exception, e:
@@ -991,6 +1045,7 @@ class MainWindow(QtGui.QMainWindow):
       isfile = self.ui.xmlFileView.model().isLaunchFile(index.row())
       self.ui.editXmlButton.setEnabled(isfile)
       self.ui.loadXmlButton.setEnabled(isfile)
+      self.ui.transferButton.setEnabled(isfile)
       self.ui.loadXmlAsDefaultButton.setEnabled(isfile)
 
   def on_refresh_xml_clicked(self):
@@ -1000,6 +1055,7 @@ class MainWindow(QtGui.QMainWindow):
     self.ui.xmlFileView.model().reloadCurrentPath()
     self.ui.editXmlButton.setEnabled(False)
     self.ui.loadXmlButton.setEnabled(False)
+    self.ui.transferButton.setEnabled(False)
     self.ui.loadXmlAsDefaultButton.setEnabled(False)
     
   def on_edit_xml_clicked(self):
@@ -1009,18 +1065,107 @@ class MainWindow(QtGui.QMainWindow):
     indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
     for index in indexes:
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
-      path = self.ui.xmlFileView.model().getFilePath(pathItem)
+      print "XML_click", pathItem, path, pathId
+      path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
         self._editor_dialog_open([path], '')
 
-  def _editor_dialog_open(self, files, search_text):
+  def on_new_xml_clicked(self):
+    '''
+    Creates a new launch file.
+    '''
+    (fileName, filter) = QtGui.QFileDialog.getSaveFileName(self,
+                                                 "New launch file", 
+                                                 self.__current_path, 
+                                                 "Config files (*.launch *.yaml);;All files (*)")
+    if fileName:
+      try:
+        (pkg, pkg_path) = package_name(os.path.dirname(fileName))
+        if pkg is None:
+          WarningMessageBox(QtGui.QMessageBox.Warning, "New File Error", 
+                         'The new file is not in a ROS package').exec_()
+          return
+        self.ui.xmlFileView.model().setPath(os.path.dirname(fileName))
+        with open(fileName, 'w+') as f:
+          f.write("<launch>\n"
+                  "  <arg name=\"robot_ns\" default=\"my_robot\"/>\n"
+                  "  <group ns=\"$(arg robot_ns)\">\n"
+                  "    <param name=\"tf_prefix\" value=\"$(arg robot_ns)\"/>\n"
+                  "\n"
+                  "    <node pkg=\"my_pkg\" type=\"my_node\" name=\"my_name\" >\n"
+                  "      <param name=\"capability_group\" value=\"MY_GROUP\"/>\n"
+                  "    </node>\n"
+                  "  </group>\n"
+                  "</launch>\n"
+                  )
+        self._editor_dialog_open([fileName], '')
+      except EnvironmentError as e:
+        WarningMessageBox(QtGui.QMessageBox.Warning, "New File Error", 
+                         'Error while create a new file',
+                          str(e)).exec_()
+
+  def on_open_xml_clicked(self):
+    (fileName, filter) = QtGui.QFileDialog.getOpenFileName(self,
+                                                 "Load launch file", 
+                                                 self.__current_path, 
+                                                 "Config files (*.launch);;All files (*)")
+    if fileName:
+      self.__current_path = os.path.dirname(fileName)
+      self.loadLaunchFile(fileName)
+
+  def on_transfer_file_clicked(self):
+    '''
+    Copies the selected file to 
+    '''
+    indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
+    for index in indexes:
+      pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
+      path = self.ui.xmlFileView.model().expandItem(pathItem, path)
+      if not path is None:
+        host = nm.nameres().getHostname(self.currentMaster.masteruri) if not self.currentMaster is None else 'localhost'
+        params = {'Host' : ('string', host),
+                  'recursive' : ('bool', 'False') }
+        dia = ParameterDialog(params)
+        dia.setFilterVisible(False)
+        dia.setWindowTitle('Transfer file')
+        dia.resize(350,120)
+        dia.setFocusField('Host')
+        if dia.exec_():
+          try:
+            params = dia.getKeywords()
+            host = params['Host']
+            rospy.loginfo("TRANSFER the launch file to host %s: %s", str(host), path)
+            recursive = params['recursive']
+            self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+                                           'transfer files to '+str(host), 
+                                           nm.starter().transfer_files, 
+                                           (str(host), path))
+            if recursive:
+              for f in LaunchConfig.getIncludedFiles(path):
+                self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+                                               'transfer files to '+str(host), 
+                                               nm.starter().transfer_files, 
+                                               (str(host), f))
+            self._progress_queue_cfg.start()
+          except Exception, e:
+            WarningMessageBox(QtGui.QMessageBox.Warning, "Transfer error", 
+                             'Error while parse parameter',
+                              str(e)).exec_()
+
+  def _editor_dialog_open(self, files, search_text, trynr=1):
     if files:
       path = files[0]
       if self.editor_dialogs.has_key(path):
         last_path = files[-1]
-        self.editor_dialogs[path].on_load_request(last_path, search_text)
-        self.editor_dialogs[path].raise_()
-        self.editor_dialogs[path].activateWindow()
+        try:
+          self.editor_dialogs[path].on_load_request(last_path, search_text)
+          self.editor_dialogs[path].raise_()
+          self.editor_dialogs[path].activateWindow()
+        except:
+          if trynr > 1:
+            raise
+          del self.editor_dialogs[path]
+          self._editor_dialog_open(files, search_text, 2)
       else:
         editor = XmlEditor(files, search_text, self)
         self.editor_dialogs[path] = editor
@@ -1039,7 +1184,7 @@ class MainWindow(QtGui.QMainWindow):
     indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
     for index in indexes:
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
-      path = self.ui.xmlFileView.model().getFilePath(pathItem)
+      path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
         self.loadLaunchFile(path)
 
@@ -1095,7 +1240,7 @@ class MainWindow(QtGui.QMainWindow):
                              os.path.basename(path).replace('.launch','').replace(' ', '_'), 
                              roslib.names.SEP, 'default_cfg'])
         self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
-                                       'Start default config '+str(hostname), 
+                                       'start default config '+str(hostname), 
                                        nm.starter().runNodeWithoutConfig, 
                                        (str(hostname), 'default_cfg_fkie', 'default_cfg', node_name, args, master_proxy.masteruri, False))
         self._progress_queue_cfg.start()
@@ -1121,14 +1266,14 @@ class MainWindow(QtGui.QMainWindow):
     indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
     for index in indexes:
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
-      path = self.ui.xmlFileView.model().getFilePath(pathItem)
+      path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
         params = {'Host' : ('string', 'localhost') }
         dia = ParameterDialog(params)
         dia.setFilterVisible(False)
         dia.setWindowTitle('Start node on...')
         dia.resize(350,120)
-        dia.setFocusField('host')
+        dia.setFocusField('Host')
         if dia.exec_():
           try:
             params = dia.getKeywords()
@@ -1154,11 +1299,29 @@ class MainWindow(QtGui.QMainWindow):
       indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
       for index in indexes:
         pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
-        path = self.ui.xmlFileView.model().getFilePath(pathItem)
+        path = self.ui.xmlFileView.model().expandItem(pathItem, path)
         if not path is None:
           rospy.loginfo("LOAD the launch file as default: %s", path)
           self.loadLaunchFile(path, True)
 
+  def on_configfile_changed(self, changed, affected):
+    '''
+    Signal hander to handle the changes of a loaded configuration file
+    @param changed: the changed file
+    @type changed: C{str}
+    @param affected: the list of tuples with masteruri and launchfile, which are affected by file change
+    @type affected: list
+    '''
+    if not changed in self.__in_question:
+      choices = dict()
+      for (muri, lfile) in affected:
+        master = self.getMaster(muri)
+        if not master is None:
+          master.launchfile = lfile
+          choices[''.join([os.path.basename(lfile), ' [', master.mastername, ']'])] = (master, lfile)
+      cfgs = SelectDialog.getValue(''.join(['Update configurations -- ', os.path.basename(changed)]), choices.keys(), False, True, self)
+      for c in cfgs:
+        choices[c][0].launchfiles = choices[c][1]
 
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   #%%%%%%%%%%%%%              Capabilities handling      %%%%%%%%%%%%%%%%%%%
