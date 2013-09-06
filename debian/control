@@ -1,0 +1,12 @@
+Source: ros-hydro-node-manager-fkie
+Section: misc
+Priority: extra
+Maintainer: Alexander Tiderko <alexander.tiderko@gmail.com>
+Build-Depends: debhelper (>= 7.0.50~), ros-hydro-catkin, ros-hydro-default-cfg-fkie, ros-hydro-master-discovery-fkie, ros-hydro-master-sync-fkie, ros-hydro-multimaster-msgs-fkie
+Homepage: http://ros.org/wiki/node_manager_fkie
+Standards-Version: 3.9.2
+
+Package: ros-hydro-node-manager-fkie
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, python-docutils, python-paramiko, ros-hydro-default-cfg-fkie, ros-hydro-dynamic-reconfigure, ros-hydro-master-discovery-fkie, ros-hydro-master-sync-fkie, ros-hydro-multimaster-msgs-fkie, ros-hydro-python-qt-binding, ros-hydro-rosgraph, ros-hydro-roslaunch, ros-hydro-roslib, ros-hydro-rosmsg, ros-hydro-rospy, ros-hydro-rosservice, screen, xterm
+Description: Graphical interface, written in PySide, to manage the running and configured ROS nodes on different hosts. For discovering the running ROS master master_discovery node will be used.
