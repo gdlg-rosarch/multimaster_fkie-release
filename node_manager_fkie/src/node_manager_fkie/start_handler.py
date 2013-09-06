@@ -41,7 +41,7 @@ import threading
 import xmlrpclib
 
 import node_manager_fkie as nm
-from common import get_ros_home, masteruri_from_ros, package_name
+from common import get_ros_home, masteruri_from_ros, package_name, package_name
 
 
 class StartException(Exception):
@@ -59,6 +59,7 @@ class BinarySelectionRequest(Exception):
     return "BinarySelectionRequest from "  + self.choices + "::" + repr(self.error)
 
 
+CACHED_PKG_PATH = dict() # {host : {pkg: path}}
 
 class StartHandler(object):
   '''
@@ -284,9 +285,9 @@ class StartHandler(object):
     param_server = xmlrpclib.ServerProxy(masteruri)
     p = None
     abs_paths = list() # tuples of (parameter name, old value, new value)
-    not_found_packages = list() # pacakges names
+    not_found_packages = list() # packages names
     try:
-      socket.setdefaulttimeout(6)
+      socket.setdefaulttimeout(6+len(clear_params))
       # multi-call style xmlrpc
       param_server_multi = xmlrpclib.MultiCall(param_server)
 
@@ -300,6 +301,7 @@ class StartHandler(object):
 #          raise StartException("Failed to clear parameter: %s"%(msg))
 
       # multi-call objects are not reusable
+      socket.setdefaulttimeout(6+len(params))
       param_server_multi = xmlrpclib.MultiCall(param_server)
       for p in params.itervalues():
         # suppressing this as it causes too much spam
@@ -481,16 +483,16 @@ class StartHandler(object):
       subprocess.Popen(shlex.split(' '.join([str(c) for c in cmd_args])), env=new_env)
       # wait for roscore to avoid connection problems while init_node
       result = -1
-      count = 0
-      while result == -1 and count < 3:
+      count = 1
+      while result == -1 and count < 11:
         try:
-          print "  retry connect to ROS master"
+          print "  retry connect to ROS master", count, '/', 10
           master = xmlrpclib.ServerProxy(masteruri)
           result, uri, msg = master.getUri(rospy.get_name())
         except:
           time.sleep(1)
           count += 1
-      if count >= 3:
+      if count >= 11:
         raise StartException('Cannot connect to the ROS-Master: '+  str(masteruri))
     finally:
       socket.setdefaulttimeout(None)
@@ -519,6 +521,7 @@ class StartHandler(object):
     @see: L{rospy.SerivceProxy}
 
     '''
+    service = str(service)
     rospy.loginfo("Call service %s[%s]: %s, %s", str(service), str(service_uri), str(service_type), str(service_args))
     from rospy.core import parse_rosrpc_uri, is_shutdown
 #    from rospy.msg import args_kwds_to_message
@@ -547,14 +550,13 @@ class StartHandler(object):
     transport = TCPROSTransport(protocol, service)
     # initialize transport
     dest_addr, dest_port = parse_rosrpc_uri(service_uri)
-
     # connect to service            
     transport.buff_size = DEFAULT_BUFF_SIZE
     try:
       transport.connect(dest_addr, dest_port, service_uri, timeout=5)
     except TransportInitError as e:
       # can be a connection or md5sum mismatch
-      raise StartException(''.join(["unable to connect to service: ", str(e)]))
+      raise StartException(''.join(["unable to connect to service: ", e]))
     transport.send_message(request, 0)
     try:
       responses = transport.receive_once()
@@ -567,9 +569,9 @@ class StartHandler(object):
       if is_shutdown():
         raise StartException("node shutdown interrupted service call")
       else:
-        raise StartException("transport error completing service call: %s"%(str(e)))
+        raise StartException("transport error completing service call: %s"%(e))
     except ServiceException, e:
-      raise StartException("Service error: %s"%(str(e)))
+      raise StartException("Service error: %s"%(e))
     finally:
       transport.close()
       transport = None
@@ -732,3 +734,41 @@ class StartHandler(object):
           raise StartException(str(''.join(['The host "', host, '" reports:\n', error])))
         if output:
           rospy.logdebug("STDOUT while kill %s on %s: %s", str(pid), host, output)
+
+  @classmethod
+  def transfer_files(cls, host, file, auto_pw_request=False, user=None, pw=None):
+    '''
+    Copies the given file to the remote host. Uses caching of remote paths.
+    '''
+    # get package of the file
+    if nm.is_local(host):
+      #it's local -> no copy needed
+      return
+    (pkg_name, pkg_path) = package_name(os.path.dirname(file))
+    if not pkg_name is None:
+      # get the subpath of the file
+      subfile_path = file.replace(pkg_path, '')
+      # get the path of the package on the remote machine
+      try:
+        output = ''
+        error = ''
+        ok = True
+        if CACHED_PKG_PATH.has_key(host) and CACHED_PKG_PATH[host].has_key(pkg_name):
+          output = CACHED_PKG_PATH[host][pkg_name]
+        else:
+          if not CACHED_PKG_PATH.has_key(host):
+            CACHED_PKG_PATH[host] = dict()
+          output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--package', pkg_name], user, pw, auto_pw_request)
+        if ok:
+          if error:
+            rospy.logwarn("ERROR while transfer %s to %s: %s", file, host, error)
+            raise StartException(str(''.join(['The host "', host, '" reports:\n', error])))
+          if output:
+            CACHED_PKG_PATH[host][pkg_name] = output
+            nm.ssh().transfer(host, file, os.path.join(output.strip(), subfile_path.strip(os.sep)))
+          else:
+            raise StartException("Remote host no returned any answer. Is there the new version of node_manager installed?")
+        else:
+          raise StartException("Can't get path from remote host. Is there the new version of node_manager installed?")
+      except nm.AuthenticationRequest as e:
+        raise nm.InteractionNeededError(e, cls.transfer_files, (host, file, auto_pw_request))
