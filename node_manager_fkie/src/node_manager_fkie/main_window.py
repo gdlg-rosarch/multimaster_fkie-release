@@ -116,7 +116,10 @@ class MainWindow(QtGui.QMainWindow):
     self.setWindowIcon(self.mIcon)
     self.setWindowTitle("Node Manager")
     self.setCentralWidget(mainWindow)
-    self.resize(1024,768)
+    screen_size = QtGui.QApplication.desktop().availableGeometry()
+    w = 1024 if screen_size.width() >= 1024 else screen_size.width()
+    h = 768 if screen_size.height() >= 768 else screen_size.height()
+    self.resize(w, h)
     
     # init the stack layout which contains the information about different ros master
     self.stackedLayout = QtGui.QStackedLayout()
@@ -239,6 +242,7 @@ class MainWindow(QtGui.QMainWindow):
     '''@ivar: stores the open XmlEditor '''
     
     
+    self.ui.simTimeLabel.setVisible(False)
     self.ui.hideDocksButton.clicked.connect(self.on_hide_docks_toggled)
 
     # since the is_local method is threaded for host names, call it to cache the localhost
@@ -376,13 +380,15 @@ class MainWindow(QtGui.QMainWindow):
       self.masters[masteruri].setParent(None)
       del self.masters[masteruri]
 
-  def getMaster(self, masteruri):
+  def getMaster(self, masteruri, create_new=True):
     '''
     @return: the Widget which represents the master of given ROS master URI. If no
     Widget for given URI is available a new one will be created.
     @rtype: L{MasterViewProxy} 
     '''
     if not self.masters.has_key(masteruri):
+      if not create_new:
+        return None
       self.masters[masteruri] = MasterViewProxy(masteruri, self)
       self.masters[masteruri].updateHostRequest.connect(self.on_host_update_request)
       self.masters[masteruri].host_description_updated.connect(self.on_host_description_updated)
@@ -411,7 +417,6 @@ class MainWindow(QtGui.QMainWindow):
             WarningMessageBox(QtGui.QMessageBox.Warning, "Load default configuration", 
                   ''.join(['Load default configuration ', self.default_load_launch, ' failed!']),
                   str(e)).exec_()
-
 
     return self.masters[masteruri]
 
@@ -715,13 +720,16 @@ class MainWindow(QtGui.QMainWindow):
       thread.setDaemon(True)
       thread.start()
 
-  def on_sync_dialog_released(self):
+  def on_sync_dialog_released(self, released=False, masteruri=None):
     self.ui.syncButton.setEnabled(False)
-    if not self.currentMaster is None:
+    master = self.currentMaster
+    if not masteruri is None:
+      master = self.getMaster(masteruri, False)
+    if not master is None:
       self._sync_dialog.resize(350,160)
       if self._sync_dialog.exec_():
         try:
-          host = nm.nameres().getHostname(self.currentMaster.masteruri)
+          host = nm.nameres().getHostname(master.masteruri)
           if not self._sync_dialog.interface_filename is None:
             # copy the interface file to remote machine
             self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
@@ -731,7 +739,7 @@ class MainWindow(QtGui.QMainWindow):
           self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
                                          'Start sync on '+str(host), 
                                          nm.starter().runNodeWithoutConfig, 
-                                         (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(self.currentMaster.masteruri), True))
+                                         (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(master.masteruri), True))
           self._progress_queue_sync.start()
         except:
           import traceback
@@ -787,7 +795,8 @@ class MainWindow(QtGui.QMainWindow):
             pass
         elif not self.currentMaster.master_info is None:
           node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
-          self.currentMaster.stop_nodes([node])
+          if not node is None:
+            self.currentMaster.stop_nodes([node])
       self.ui.syncButton.setEnabled(True)
 
   def on_master_timecheck(self):
@@ -857,6 +866,10 @@ class MainWindow(QtGui.QMainWindow):
         self.__current_icon = icon
         self.ui.imageLabel.setPixmap(icon.pixmap(self.ui.nameFrame.size()))
         self.ui.imageLabel.setToolTip('')
+    # set sim_time info
+    master = self.getMaster(masteruri, False)
+    sim_time_enabled = self.ui.masternameLabel.isEnabled() and not master is None and master.use_sim_time
+    self.ui.simTimeLabel.setVisible(sim_time_enabled)
 #    else:
 #      icon = QtGui.QIcon()
 #      self.ui.imageLabel.setPixmap(icon.pixmap(label.size()))
@@ -1065,7 +1078,6 @@ class MainWindow(QtGui.QMainWindow):
     indexes = self.ui.xmlFileView.selectionModel().selectedIndexes()
     for index in indexes:
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
-      print "XML_click", pathItem, path, pathId
       path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
         self._editor_dialog_open([path], '')
@@ -1351,7 +1363,13 @@ class MainWindow(QtGui.QMainWindow):
     self.ui.descriptionTextEdit.setText(text)
 
   def on_description_anchorClicked(self, url):
-    if url.toString().startswith('topic://'):
+    if url.toString().startswith('open_sync_dialog://'):
+      self.on_sync_dialog_released(False, str(url.encodedPath()).replace('open_sync_dialog', 'http'))
+    elif url.toString().startswith('show_all_screens://'):
+      master = self.getMaster(str(url.encodedPath()).replace('show_all_screens', 'http'), False)
+      if not master is None:
+        master.on_show_all_screens()
+    elif url.toString().startswith('topic://'):
       if not self.currentMaster is None:
         self.currentMaster.show_topic_output(url.encodedPath(), False)
     elif url.toString().startswith('topichz://'):
@@ -1360,6 +1378,21 @@ class MainWindow(QtGui.QMainWindow):
     elif url.toString().startswith('service://'):
       if not self.currentMaster is None:
         self.currentMaster.service_call(url.encodedPath())
+    elif url.toString().startswith('unregister_node://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_unregister_nodes()
+    elif url.toString().startswith('restart_node://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_force_start_nodes()
+    elif url.toString().startswith('kill_node://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_kill_nodes()
+    elif url.toString().startswith('kill_screen://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_kill_screens()
+    elif url.toString().startswith('copy_log_path://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_log_path_copy()
     elif url.toString().startswith('launch://'):
       self._editor_dialog_open([str(url.encodedPath())], '')
     else:
