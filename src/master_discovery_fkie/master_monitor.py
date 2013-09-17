@@ -44,7 +44,7 @@ import roslib.network
 import rospy
 
 try: # to avoid the problems with autodoc on ros.org/wiki site
-  from multimaster_msgs_fkie.msg import LinkState, LinkStatesStamped, MasterState, ROSMaster, SyncMasterInfo, SyncTopicInfo
+  from multimaster_msgs_fkie.msg import LinkState, LinkStatesStamped, MasterState, ROSMaster, SyncMasterInfo, SyncTopicInfo, SyncServiceInfo
   from multimaster_msgs_fkie.srv import DiscoverMasters, GetSyncInfo
 except:
   pass
@@ -560,6 +560,18 @@ class MasterMonitor(object):
     '''
     #'print "updateSyncInfo _create_access_lock try...", threading.current_thread()
 
+    def getNodeuri(nodename, publisher, subscriber, services):
+      for p in publisher:
+        if nodename == p.node:
+          return p.nodeuri
+      for p in subscriber:
+        if nodename == p.node:
+          return p.nodeuri
+      for s in services:
+        if nodename == s.node:
+          return s.nodeuri
+      return None
+
     with self._create_access_lock:
       #'print "  updateSyncInfo _create_access_lock locked", threading.current_thread()
       master_state = self.__new_master_state
@@ -583,12 +595,21 @@ class MasterMonitor(object):
         for m in sync_info.hosts:
           for n in m.nodes:
             try:
-              master_state.getNode(n).masteruri = m.masteruri
+              # TODO: add nodeuri to the nodes (needs changes in the MSG definitions)
+              # set the sync node only if it has the same uri
+              nuri = getNodeuri(n, m.publisher, m.subscriber, m.services)
+              state_node = master_state.getNode(n)
+              if not state_node is None and (state_node.uri == nuri or nuri is None):
+                state_node.masteruri = m.masteruri
             except:
               pass
+#              import traceback
+#              print traceback.format_exc()
           for s in m.services:
             try:
-              master_state.getService(s).masteruri = m.masteruri
+              state_service = master_state.getService(s.service)
+              if not state_service is None and state_service.uri == s.serviceuri:
+                state_service.masteruri = m.masteruri
             except:
               pass
       #'print "updateSyncInfo _create_access_lock RET", threading.current_thread()
