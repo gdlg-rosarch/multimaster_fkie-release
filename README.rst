@@ -1,39 +1,17 @@
+FKIE multimaster for ROS
+========================
 
-Node Manager
-============
+The ROS stack of multimaster_fkie_ offers a complete solution for using ROS with multicores.
 
-A GUI to manage the configuration on local and remote ROS masters. For more details see roswiki_ or use the **(?)** button in the title bar.
+The descriptions of individual packets is on ROS wiki:
 
-.. _roswiki: http://www.ros.org/wiki/node_manager_fkie
+* discovery_ -- `discovery using multicast or zeroconf`
+* synchronization_ -- `master synchronization`
+* `node manager GUI`_ -- `A GUI to manage the configuration on local and remote ROS masters`
+* `default configuration`_ -- `Helper node allows an easy start of remote nodes`
 
-
-Shortcats
----------
-
-===================== ========
-**Ctrl+R**            Opens a dialog to launch a master_discovery_ node on entered host.
-**Ctrl+E**            Opens an XML Editor for selected launch file.
-**Ctrl+L**            Loads the selected launch file into selected host.
-**Ctrl+O**            Runs on selected host default_cfg_ node with selected launch file as parameter.
-**Alt+N**             Opens a dialog to run a ROS node without a configuration. This node will be launched in a `SCREEN`.
-**Alt+K**             Runs the `rxconsole` connected to the ROS master of selected host.
-**Alt+G**             Runs the `rxgraph` connected to the ROS master of selected host.
-**Alt+R**             Runs selected nodes. Ignores already running nodes.
-**Alt+S**             Stops selected nodes. If more then one node is selected, nodes ending with `rosout`, `node_manager`, `master_discovery`, `master_sync` or `default_cfg` are ignored.
-**Ctrl+Backspace**    Sends a `SIGKILL` to selected nodes. If more then one node is selected, nodes ending with `rosout`, `node_manager`, `master_discovery`, `master_sync` and `default_cfg` are ignored.
-**Ctrl+Delete**       Unregister selected nodes (their topics and services) from ROS master. If more then one node is selected, nodes ending with `rosout`, `node_manager`, `master_discovery`, `master_sync` and `default_cfg` are ignored.
-**Shift+Backspace**   Sends a `SIGKILL` to assigned `SCREEN` of selected nodes.
-**Shift+S**           Shows all available `SCREEN's` which contains the ROS nodes launched by node manager.
-**Ctrl+F4**           Closes the loaded configurations.
-**Alt+E**             Expands all groups in Nodes tab.
-**Alt+C**             Collapses all groups in Nodes tab.
-**Alt+{1..5}**        Selects all nodes of the *{first...fifth}* host in Nodes tab excepting the manage nodes.
-===================== ========
-
-TODO
-====
-... write local help
-
-
-.. _master_discovery: http://www.ros.org/wiki/master_discovery_fkie
-.. _default_cfg: http://www.ros.org/wiki/default_cfg_fkie
+.. _multimaster_fkie: http://www.ros.org/wiki/multimaster_fkie
+.. _discovery: http://www.ros.org/wiki/master_discovery_fkie
+.. _synchronization: http://www.ros.org/wiki/master_sync_fkie
+.. _`node manager GUI`: http://www.ros.org/wiki/node_manager_fkie
+.. _`default configuration`: http://www.ros.org/wiki/default_cfg_fkie
