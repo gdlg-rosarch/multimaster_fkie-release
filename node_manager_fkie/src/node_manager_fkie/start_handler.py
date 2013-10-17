@@ -91,7 +91,7 @@ class StartHandler(object):
     n = launch_config.getNode(node)
     if n is None:
       raise StartException(''.join(["Node '", node, "' not found!"]))
-    
+
     env = list(n.env_args)
     prefix = n.launch_prefix if not n.launch_prefix is None else ''
     if prefix.lower() == 'screen' or prefix.lower().find('screen ') != -1:
@@ -100,7 +100,7 @@ class StartHandler(object):
     args = [''.join(['__ns:=', n.namespace]), ''.join(['__name:=', n.name])]
     if not (n.cwd is None):
       args.append(''.join(['__cwd:=', n.cwd]))
-    
+
     # add remaps
     for remap in n.remap_args:
       args.append(''.join([remap[0], ':=', remap[1]]))
@@ -131,7 +131,7 @@ class StartHandler(object):
     if not masteruri is None and not masteruri in launch_config.global_param_done:
       global_node_names = cls.getGlobalParams(launch_config.Roscfg)
       rospy.loginfo("Register global parameter:\n  %s", '\n  '.join(global_node_names))
-      abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, global_node_names, [])
+      abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, global_node_names, [], user, pw, auto_pw_request)
       launch_config.global_param_done.append(masteruri)
 
     # add params
@@ -147,7 +147,7 @@ class StartHandler(object):
           clear_params.append(cparam)
       rospy.loginfo("Delete parameter:\n  %s", '\n  '.join(clear_params))
       rospy.loginfo("Register parameter:\n  %s", '\n  '.join(params))
-      abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, params, clear_params)
+      abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, params, clear_params, user, pw, auto_pw_request)
     #'print "RUN prepared", node, time.time()
 
     if nm.is_local(host): 
@@ -201,12 +201,11 @@ class StartHandler(object):
       cmd_args.append(str(n.args))
       cmd_args[len(cmd_args):] = args
       rospy.loginfo("RUN: %s", ' '.join(cmd_args))
-      if not masteruri is None:
-        new_env=dict(os.environ)
-        new_env['ROS_MASTER_URI'] = masteruri
-        ps = subprocess.Popen(shlex.split(str(' '.join(cmd_args))), cwd=cwd, env=new_env)
-      else:
-        ps = subprocess.Popen(shlex.split(str(' '.join(cmd_args))), cwd=cwd)
+      new_env = dict(os.environ)
+      new_env['ROS_MASTER_URI'] = masteruri
+      for k, v in env:
+        new_env[k] = v
+      ps = subprocess.Popen(shlex.split(str(' '.join(cmd_args))), cwd=cwd, env=new_env)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
       thread.setDaemon(True)
@@ -225,8 +224,19 @@ class StartHandler(object):
         rospy.logwarn("env_loader in machine tag currently not supported")
         raise StartException("env_loader in machine tag currently not supported")
       if env:
-        env_command = "env "+' '.join(["%s=%s"%(k,v) for (k, v) in env])
-      
+        new_env = dict()
+        try:
+          for (k, v) in env:
+            v_value, is_abs_path, found, package = cls._resolve_abs_paths(v, host, user, pw, auto_pw_request)
+            new_env[k] = v_value
+            if is_abs_path:
+              abs_paths.append(('ENV', "%s=%s"%(k,v), "%s=%s"%(k,v_value)))
+              if not found and package:
+                not_found_packages.append(package)
+          env_command = "env "+' '.join(["%s=%s"%(k,v) for (k, v) in new_env.items()])
+        except nm.AuthenticationRequest as e:
+          raise nm.InteractionNeededError(e, cls.runNode, (node, launch_config, force2host, masteruri, auto_pw_request))
+
       startcmd = [env_command, nm.STARTER_SCRIPT, 
                   '--package', str(n.package),
                   '--node_type', str(n.type),
@@ -237,18 +247,18 @@ class StartHandler(object):
         startcmd.append(masteruri)
       if prefix:
         startcmd[len(startcmd):] = ['--prefix', prefix]
-      
+
       #rename the absolute paths in the args of the node
       node_args = []
       try:
         for a in n.args.split():
-          a_value, is_abs_path, found, package = cls._resolve_abs_paths(a, host)
+          a_value, is_abs_path, found, package = cls._resolve_abs_paths(a, host, user, pw, auto_pw_request)
           node_args.append(a_value)
           if is_abs_path:
             abs_paths.append(('ARGS', a, a_value))
             if not found and package:
               not_found_packages.append(package)
-  
+
         startcmd[len(startcmd):] = node_args
         startcmd[len(startcmd):] = args
         rospy.loginfo("Run remote on %s: %s", host, str(' '.join(startcmd)))
@@ -277,7 +287,7 @@ class StartHandler(object):
     #'print "RUN OK", node, time.time()
 
   @classmethod
-  def _load_parameters(cls, masteruri, params, clear_params):
+  def _load_parameters(cls, masteruri, params, clear_params, user, pw, auto_pw_request):
     """
     Load parameters onto the parameter server
     """
@@ -307,7 +317,7 @@ class StartHandler(object):
       param_server_multi = xmlrpclib.MultiCall(param_server)
       for p in params.itervalues():
         # suppressing this as it causes too much spam
-        value, is_abs_path, found, package = cls._resolve_abs_paths(p.value, nm.nameres().address(masteruri))
+        value, is_abs_path, found, package = cls._resolve_abs_paths(p.value, nm.nameres().address(masteruri), user, pw, auto_pw_request)
         if is_abs_path:
           abs_paths.append((p.key, p.value, value))
           if not found and package:
@@ -328,7 +338,7 @@ class StartHandler(object):
     return abs_paths, not_found_packages
   
   @classmethod
-  def _resolve_abs_paths(cls, value, host):
+  def _resolve_abs_paths(cls, value, host, user, pw, auto_pw_request):
     '''
     Replaces the local absolute path by remote absolute path. Only valid ROS
     package paths are resolved.
@@ -338,11 +348,11 @@ class StartHandler(object):
       if nm.is_local(host):
         return value, True, True, ''
       else:
-#        print "ABS PATH:", value, os.path.dirname(value)
+#        print "ABS PATH:", value, os.path.dirname(value), host
         dir = os.path.dirname(value) if os.path.isfile(value) else value
         package, package_path = package_name(dir)
         if package:
-          output, error, ok = nm.ssh().ssh_exec(host, ['rospack', 'find', package])
+          output, error, ok = nm.ssh().ssh_exec(host, ['rospack', 'find', package], user, pw, auto_pw_request)
           if ok:
             if output:
 #              print "  RESOLVED:", output
@@ -465,9 +475,8 @@ class StartHandler(object):
       masteruri = roslib.rosenv.get_master_uri()
     #start roscore, if needed
     try:
-      log_path = nm.ScreenHandler.LOG_PATH
-      if not os.path.isdir(log_path):
-        os.makedirs(log_path)
+      if not os.path.isdir(nm.ScreenHandler.LOG_PATH):
+        os.makedirs(nm.ScreenHandler.LOG_PATH)
       socket.setdefaulttimeout(3)
       master = xmlrpclib.ServerProxy(masteruri)
       master.getUri(rospy.get_name())
@@ -558,7 +567,7 @@ class StartHandler(object):
       transport.connect(dest_addr, dest_port, service_uri, timeout=5)
     except TransportInitError as e:
       # can be a connection or md5sum mismatch
-      raise StartException(''.join(["unable to connect to service: ", e]))
+      raise StartException(''.join(["unable to connect to service: ", str(e)]))
     transport.send_message(request, 0)
     try:
       responses = transport.receive_once()
@@ -571,9 +580,9 @@ class StartHandler(object):
       if is_shutdown():
         raise StartException("node shutdown interrupted service call")
       else:
-        raise StartException("transport error completing service call: %s"%(e))
+        raise StartException("transport error completing service call: %s"%(str(e)))
     except ServiceException, e:
-      raise StartException("Service error: %s"%(e))
+      raise StartException("Service error: %s"%(str(e)))
     finally:
       transport.close()
       transport = None
@@ -623,7 +632,7 @@ class StartHandler(object):
         raise nm.InteractionNeededError(e, cls.copylogPath2Clipboards, (host, nodes, auto_pw_request))
 
   @classmethod
-  def openLog(cls, nodename, host):
+  def openLog(cls, nodename, host, user=None):
     '''
     Opens the log file associated with the given node in a new terminal.
     @param nodename: the name of the node (with name space)
@@ -663,12 +672,12 @@ class StartHandler(object):
         found = True
       return found
     else:
-      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_screen_log', nodename], title_opt)
+      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_screen_log', nodename], title_opt, user)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
       thread.setDaemon(True)
       thread.start()
-      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_ros_log', nodename], title_opt.replace('LOG', 'ROSLOG'))
+      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_ros_log', nodename], title_opt.replace('LOG', 'ROSLOG'), user)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
       thread.setDaemon(True)
@@ -767,7 +776,7 @@ class StartHandler(object):
             raise StartException(str(''.join(['The host "', host, '" reports:\n', error])))
           if output:
             CACHED_PKG_PATH[host][pkg_name] = output
-            nm.ssh().transfer(host, file, os.path.join(output.strip(), subfile_path.strip(os.sep)))
+            nm.ssh().transfer(host, file, os.path.join(output.strip(), subfile_path.strip(os.sep)), user)
           else:
             raise StartException("Remote host no returned any answer. Is there the new version of node_manager installed?")
         else:
