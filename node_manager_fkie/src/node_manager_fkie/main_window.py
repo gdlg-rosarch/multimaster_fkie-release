@@ -34,6 +34,7 @@ import os
 import time
 import xmlrpclib
 import threading
+import getpass
 
 from datetime import datetime
 
@@ -61,6 +62,7 @@ from .screen_handler import ScreenHandler
 from .sync_dialog import SyncDialog
 from .common import masteruri_from_ros, package_name
 from .select_dialog import SelectDialog
+from .master_list_model import MasterModel, MasterSyncItem
 
 import node_manager_fkie as nm
 
@@ -86,10 +88,7 @@ class MainWindow(QtGui.QMainWindow):
     self.__icons = {'default_pc' : QtGui.QIcon(''.join([':/icons/crystal_clear_miscellaneous.png']))} # (masnter name : QIcon)
     self.__current_icon = None
     self.__current_master_label_name = None
-    try:
-      self.__current_path = os.environ('HOME')
-    except:
-      self.__current_path = os.getcwd()
+    self.__current_path = os.path.expanduser('~')
     #self.setAttribute(QtCore.Qt.WA_AlwaysShowToolTips, True)
     #load the UI formular for the main window
 #    loader = QtUiTools.QUiLoader()
@@ -100,27 +99,27 @@ class MainWindow(QtGui.QMainWindow):
     #/home/tiderko/ros/src/multimaster_fkie/node_manager_fkie/src/node_manager_fkie/
     loadUi(ui_file, self.ui)
     self.ui.setObjectName('MainUI')
+    self.ui.user_frame.setVisible(False)
+    self._add_user_to_combo(getpass.getuser())
+    self.ui.userComboBox.editTextChanged.connect(self.on_user_changed)
     self.ui.masterInfoFrame.setEnabled(False)
+    self.ui.infoButton.clicked.connect(self.on_info_clicked)
     self.ui.refreshHostButton.clicked.connect(self.on_refresh_master_clicked)
     self.ui.runButton.clicked.connect(self.on_run_node_clicked)
     self.ui.rxconsoleButton.clicked.connect(self.on_show_rxconsole_clicked)
     self.ui.rxgraphButton.clicked.connect(self.on_show_rxgraph_clicked)
-    self.ui.syncButton.released.connect(self.on_sync_released)
+    self.ui.syncButton.released.connect(self.on_sync_dialog_released)
     # creates a default config menu
-    sync_menu = QtGui.QMenu(self)
-    self.syncDialogAct = QtGui.QAction("&Open sync dialog", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_S), statusTip="Opens a sync dialog with additional sync options", triggered=self.on_sync_dialog_released)
-    sync_menu.addAction(self.syncDialogAct)
-    self.ui.syncButton.setMenu(sync_menu)
+#    sync_menu = QtGui.QMenu(self)
+#    self.syncDialogAct = QtGui.QAction("&Open sync dialog", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_S), statusTip="Opens a sync dialog with additional sync options", triggered=self.on_sync_dialog_released)
+#    sync_menu.addAction(self.syncDialogAct)
+#    self.ui.syncButton.setMenu(sync_menu)
 
     self.mIcon = QtGui.QIcon(":/icons/crystal_clear_prop_run.png")
     self.setWindowIcon(self.mIcon)
     self.setWindowTitle("Node Manager")
     self.setCentralWidget(mainWindow)
-    screen_size = QtGui.QApplication.desktop().availableGeometry()
-    w = 1024 if screen_size.width() >= 1024 else screen_size.width()
-    h = 768 if screen_size.height() >= 768 else screen_size.height()
-    self.resize(w, h)
-    
+
     # init the stack layout which contains the information about different ros master
     self.stackedLayout = QtGui.QStackedLayout()
     self.stackedLayout.setObjectName('stackedLayout')
@@ -139,14 +138,16 @@ class MainWindow(QtGui.QMainWindow):
     self._progress_queue_sync = ProgressQueue(self.ui.progressFrame_sync, self.ui.progressBar_sync, self.ui.progressCancelButton_sync)
 
     # initialize the view for the discovered ROS master
-    from master_list_model import MasterModel
     self.master_model = MasterModel(self.getMasteruri())
-    self.ui.masterListView.setModel(self.master_model)
-    self.ui.masterListView.setAlternatingRowColors(True)
-    self.ui.masterListView.clicked.connect(self.on_master_selection_changed)
-    self.ui.masterListView.activated.connect(self.on_master_selection_changed)
-    sm = self.ui.masterListView.selectionModel()
-    sm.currentRowChanged.connect(self.on_masterListView_selection_changed)
+    self.ui.masterTableView.setModel(self.master_model)
+#    self.ui.masterTableView.setAlternatingRowColors(True)
+    self.ui.masterTableView.clicked.connect(self.on_master_table_clicked)
+    self.ui.masterTableView.pressed.connect(self.on_master_table_pressed)
+    self.ui.masterTableView.activated.connect(self.on_master_table_activated)
+    sm = self.ui.masterTableView.selectionModel()
+    sm.currentRowChanged.connect(self.on_masterTableView_selection_changed)
+    for i, (name, width) in enumerate(MasterModel.header):
+      self.ui.masterTableView.setColumnWidth(i, width)
     self.ui.refreshAllButton.clicked.connect(self.on_all_master_refresh_clicked)
     self.ui.discoveryButton.clicked.connect(self.on_discover_network_clicked)
     self.ui.startRobotButton.clicked.connect(self.on_start_robot_clicked)
@@ -191,7 +192,7 @@ class MainWindow(QtGui.QMainWindow):
     self.stats_topic.stats_signal.connect(self.on_conn_stats_updated)
     
     nm.file_watcher().file_changed.connect(self.on_configfile_changed)
-    self.__in_question = list()
+    self.__in_question = set()
 
     ############################################################################
     ############################################################################
@@ -371,9 +372,7 @@ class MainWindow(QtGui.QMainWindow):
     '''
     if self.masters.has_key(masteruri):
       if not self.currentMaster is None and self.currentMaster.masteruri == masteruri:
-        self.currentMaster = None
-        self.stackedLayout.setCurrentIndex(0)
-        self.on_master_timecheck()
+        self.setCurrentMaster(None)
       self.masters[masteruri].stop()
       self.stackedLayout.removeWidget(self.masters[masteruri])
       self.ui.tabPlace.layout().removeWidget(self.masters[masteruri])
@@ -396,6 +395,7 @@ class MainWindow(QtGui.QMainWindow):
       self.masters[masteruri].remove_config_signal.connect(self.on_remove_config)
       self.masters[masteruri].description_signal.connect(self.on_description_update)
       self.masters[masteruri].request_xml_editor.connect(self._editor_dialog_open)
+      self.masters[masteruri].stop_nodes_signal.connect(self.on_stop_nodes)
       self.stackedLayout.addWidget(self.masters[masteruri])
       if masteruri == self.getMasteruri():
         if self.default_load_launch:
@@ -411,7 +411,7 @@ class MainWindow(QtGui.QMainWindow):
               self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
                                              'start default config '+str(host), 
                                              nm.starter().runNodeWithoutConfig, 
-                                             (host, 'default_cfg_fkie', 'default_cfg', node_name, args, masteruri, False))
+                                             (host, 'default_cfg_fkie', 'default_cfg', node_name, args, masteruri, False, self.masters[masteruri].current_user))
               self._progress_queue_cfg.start()
           except Exception as e:
             WarningMessageBox(QtGui.QMessageBox.Warning, "Load default configuration", 
@@ -424,7 +424,7 @@ class MainWindow(QtGui.QMainWindow):
     for key, value in self.masters.items():
       if nm.nameres().getHostname(key) == host and not value.master_state is None:
         self._update_handler.requestMasterInfo(value.master_state.uri, value.master_state.monitoruri)
-        
+
   def on_host_description_updated(self, masteruri, host, descr):
     self.master_model.updateDescription(nm.nameres().mastername(masteruri, host), descr)
 
@@ -464,27 +464,25 @@ class MainWindow(QtGui.QMainWindow):
     @param on: the enable / disable the local monitoring
     @type on: C{boolean}
     '''
-    self.ui.masterListView.setEnabled(not on)
+    self.ui.masterTableView.setEnabled(not on)
     self.ui.refreshAllButton.setEnabled(not on)
     self.own_master_monitor.pause(not on)
     if on:
-      self.ui.masterListView.setToolTip("use 'Start' button to enable the master discovering")
+      self.ui.masterTableView.setToolTip("use 'Start' button to enable the master discovering")
     else:
-      self.ui.masterListView.setToolTip('')
+      self.ui.masterTableView.setToolTip('')
     if on:
       # remove discovered ROS master and set the local master to selected
       for uri in self.masters.keys():
         master = self.masters[uri]
         if nm.is_local(nm.nameres().getHostname(uri)):
           if not self._history_selected_robot or master.mastername == self._history_selected_robot:
-            self.currentMaster = master
-            self.stackedLayout.setCurrentWidget(master)
-            self.on_master_timecheck()
+            self.setCurrentMaster(master)
         else:
           if not master.master_state is None:
             self.master_model.removeMaster(master.master_state.name)
           self.removeMaster(uri)
-      self.ui.masterListView.doItemsLayout()
+#      self.ui.masterTableView.doItemsLayout()
 
 
 
@@ -552,7 +550,7 @@ class MainWindow(QtGui.QMainWindow):
       self.getMaster(msg.master.uri).master_state = msg.master
       self._assigne_icon(msg.master.name)
       self.master_model.updateMaster(msg.master)
-      self.ui.masterListView.doItemsLayout()
+#      self.ui.masterTableView.doItemsLayout()
       self._update_handler.requestMasterInfo(msg.master.uri, msg.master.monitoruri)
     if msg.state == MasterState.STATE_NEW:
       nm.nameres().addMasterEntry(msg.master.uri, msg.master.name, host, host)
@@ -560,7 +558,7 @@ class MainWindow(QtGui.QMainWindow):
       self.getMaster(msg.master.uri).master_state = msg.master
       self._assigne_icon(msg.master.name)
       self.master_model.updateMaster(msg.master)
-      self.ui.masterListView.doItemsLayout()
+#      self.ui.masterTableView.doItemsLayout()
       self._update_handler.requestMasterInfo(msg.master.uri, msg.master.monitoruri)
     if msg.state == MasterState.STATE_REMOVED:
       if msg.master.uri == self.getMasteruri():
@@ -569,7 +567,7 @@ class MainWindow(QtGui.QMainWindow):
       else:
         nm.nameres().removeMasterEntry(msg.master.uri)
         self.master_model.removeMaster(msg.master.name)
-        self.ui.masterListView.doItemsLayout()
+#        self.ui.masterTableView.doItemsLayout()
         self.removeMaster(msg.master.uri)
 #      if len(self.masters) == 0:
 #        self._setLocalMonitoring(True)
@@ -590,7 +588,7 @@ class MainWindow(QtGui.QMainWindow):
     @param minfo: the ROS master Info
     @type minfo: L{master_discovery_fkie.MasterInfo}
     '''
-    rospy.loginfo("MASTERINFO from %s (%s) received", minfo.mastername, minfo.masteruri)
+    rospy.logdebug("MASTERINFO from %s (%s) received", minfo.mastername, minfo.masteruri)
     self._con_tries[minfo.masteruri] = 0
 #    cputimes_m = os.times()
 #    cputime_init_m = cputimes_m[0] + cputimes_m[1]
@@ -607,26 +605,24 @@ class MainWindow(QtGui.QMainWindow):
 #          print master.master_state.name, cputime
           if not master.master_info is None:
             if self._history_selected_robot == minfo.mastername and self._history_selected_robot == master.mastername and self.currentMaster != master:
-              self.currentMaster = master
-              self.stackedLayout.setCurrentWidget(master)
-              self.on_master_timecheck()
+              if not self.currentMaster is None and not self.currentMaster.is_local:
+                self.setCurrentMaster(master)
             elif nm.is_local(nm.nameres().getHostname(master.master_info.masteruri)) or self.restricted_to_one_master:
               if new_info:
                 has_discovery_service = self.hasDiscoveryService(minfo)
                 if not self.own_master_monitor.isPaused() and has_discovery_service:
                   self._subscribe()
                 elif self.currentMaster is None and (not self._history_selected_robot or self._history_selected_robot == minfo.mastername):
-                  self.currentMaster = master
-                  self.stackedLayout.setCurrentWidget(master)
-                  self.on_master_timecheck()
+                  self.setCurrentMaster(master)
 
             # update the list view, whether master is synchronized or not
             if master.master_info.masteruri == minfo.masteruri:
               self.master_model.setChecked(master.master_state.name, not minfo.getNodeEndsWith('master_sync') is None)
           self.capabilitiesTable.updateState(minfo.masteruri, minfo)
-          self.updateDuplicateNodes()
         except Exception, e:
           rospy.logwarn("Error while process received master info from %s: %s", minfo.masteruri, str(e))
+      # update the duplicate nodes
+      self.updateDuplicateNodes()
       # update the buttons, whether master is synchronized or not
       if not self.currentMaster is None and not self.currentMaster.master_info is None and not self.restricted_to_one_master:
         self.ui.syncButton.setEnabled(True)
@@ -668,9 +664,21 @@ class MainWindow(QtGui.QMainWindow):
   #%%%%%%%%%%%%%              Handling of master info frame         %%%%%%%%
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+  def on_info_clicked(self):
+    text = ''.join(['<dl>'])
+    text = ''.join([text, '<dt><b>Maintainer</b>: ', 'Alexander Tiderko ',  '<font color=gray>alexander.tiderko@gmail.com</font>', '</dt>'])
+    text = ''.join([text, '<dt><b>Author</b>: ', 'Alexander Tiderko, Timo Roehling', '</dt>'])
+    text = ''.join([text, '<dt><b>License</b>: ', 'BSD, some icons are licensed under the GNU Lesser General Public License (LGPL) or Creative Commons Attribution-Noncommercial 3.0 License', '</dt>'])
+    text = ''.join([text, '</dl>'])
+    text = ''.join([text, '<dt><b>Version</b>: ', nm.__version__, ' (', nm.__date__,')', '</dt>'])
+    QtGui.QMessageBox.about(self, 'About Node Manager', text)
+
   def on_refresh_master_clicked(self):
     if not self.currentMaster is None:
       rospy.loginfo("Request an update from %s", str(self.currentMaster.master_state.monitoruri))
+      check_ts = self.currentMaster.master_info.check_ts
+      self.currentMaster.master_info.timestamp = self.currentMaster.master_info.timestamp - 1.0
+      self.currentMaster.master_info.check_ts = check_ts
       self._update_handler.requestMasterInfo(self.currentMaster.master_state.uri, self.currentMaster.master_state.monitoruri)
 #      self.currentMaster.remove_all_def_configs()
 
@@ -725,7 +733,7 @@ class MainWindow(QtGui.QMainWindow):
     master = self.currentMaster
     if not masteruri is None:
       master = self.getMaster(masteruri, False)
-    if not master is None:
+    if not master is None and self.ui.syncButton.isChecked():
       self._sync_dialog.resize(350,160)
       if self._sync_dialog.exec_():
         try:
@@ -735,27 +743,35 @@ class MainWindow(QtGui.QMainWindow):
             self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
                                            'Transfer sync interface '+str(host), 
                                            nm.starter().transfer_files, 
-                                           (str(host), self._sync_dialog.interface_filename))
+                                           (str(host), self._sync_dialog.interface_filename), False, master.current_user)
           self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
                                          'Start sync on '+str(host), 
                                          nm.starter().runNodeWithoutConfig, 
-                                         (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(master.masteruri), True))
+                                         (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(master.masteruri), False, master.current_user))
           self._progress_queue_sync.start()
         except:
           import traceback
           WarningMessageBox(QtGui.QMessageBox.Warning, "Start sync error", 
                             "Error while start sync node",
                             str(traceback.format_exc())).exec_()
-          
+      else:
+        self.ui.syncButton.setChecked(False)
+    elif not master is None and not master.master_info is None:
+      node = master.master_info.getNodeEndsWith('master_sync')
+      if not node is None:
+        master.stop_nodes([node])
     self.ui.syncButton.setEnabled(True)
 
-  def on_sync_released(self):
+  def on_sync_released(self, external_call=False):
     '''
     Enable or disable the synchronization of the master cores
     '''
     key_mod = QtGui.QApplication.keyboardModifiers()
     if (key_mod & QtCore.Qt.ShiftModifier or key_mod & QtCore.Qt.ControlModifier):
-      self.ui.syncButton.showMenu()
+      if external_call:
+        self.on_sync_dialog_released()
+#      else:
+#        self.ui.syncButton.showMenu()
       if not self.currentMaster.master_info is None:
         node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
         self.ui.syncButton.setChecked(not node is None)
@@ -767,7 +783,8 @@ class MainWindow(QtGui.QMainWindow):
           if not self.currentMaster.master_info is None:
             node = self.currentMaster.getNode('/master_sync')
             if node:
-              ret = QtGui.QMessageBox.question(self, 'Start synchronization','Start the synchronization using loaded configuration?\n `No` starts the master_sync with default parameter.', QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+              def_cfg_info = '\nNote: default_cfg parameter will be changed!' if node[0].has_default_cfgs(node[0].cfgs) else ''
+              ret = QtGui.QMessageBox.question(self, 'Start synchronization','Start the synchronization using loaded configuration?\n\n `No` starts the master_sync with default parameter.%s'%def_cfg_info, QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
               if ret == QtGui.QMessageBox.Yes:
                 self.currentMaster.start_nodes([node[0]])
                 return
@@ -784,12 +801,14 @@ class MainWindow(QtGui.QMainWindow):
           sync_args.append(''.join(['_sync_topics:=', '[]']))
           sync_args.append(''.join(['_ignore_services:=', '[]']))
           sync_args.append(''.join(['_sync_services:=', '[]']))
+          sync_args.append(''.join(['_sync_remote_nodes:=', 'False']))
+
           try:
             host = nm.nameres().getHostname(self.currentMaster.masteruri)
             self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
                                            'start sync on '+str(host), 
                                            nm.starter().runNodeWithoutConfig, 
-                                           (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', sync_args, str(self.currentMaster.masteruri), False))
+                                           (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', sync_args, str(self.currentMaster.masteruri), False, self.currentMaster.current_user))
             self._progress_queue_sync.start()
           except:
             pass
@@ -894,11 +913,10 @@ class MainWindow(QtGui.QMainWindow):
 
   def updateDuplicateNodes(self):
     # update the duplicate nodes
-    running_nodes = []
+    running_nodes = dict()
     for uri, m in self.masters.items():
       if not m.master_state is None and m.master_state.online:
-#        running_nodes[len(running_nodes):] = m.getRunningNodesIfSync()
-        running_nodes[len(running_nodes):] = m.getRunningNodesIfLocal()
+        running_nodes.update(m.getRunningNodesIfLocal())
     for uri, m in self.masters.items():
       if not m.master_state is None:
         m.markNodesAsDuplicateOf(running_nodes)
@@ -909,43 +927,103 @@ class MainWindow(QtGui.QMainWindow):
   #%%%%%%%%%%%%%              Handling of master list view          %%%%%%%%
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+  def on_master_table_pressed(self, selected):
+    pass
+
+  def on_master_table_clicked(self, selected):
+    '''
+    On click on the sync item, the master_sync node will be started or stopped,
+    depending on run state.
+    '''
+    item = self.master_model.itemFromIndex(selected)
+    if isinstance(item, MasterSyncItem):
+      self.ui.syncButton.setChecked(not item.synchronized)
+      item.synchronized = not item.synchronized
+      self.on_sync_released(True)
+      item.synchronized = self.ui.syncButton.isChecked()
+
+  def on_master_table_activated(self, selected):
+    pass
+
   def on_master_selection_changed(self, selected):
     '''
     If a master was selected, set the corresponding Widget of the stacked layout
     to the current widget and shows the state of the selected master.
     '''
-    si = self.ui.masterListView.selectedIndexes()
-    for index in si:
-      if index.row() == selected.row():
-        item = self.master_model.itemFromIndex(selected)
-        if not item is None:
-          self.currentMaster = self.getMaster(item.master.uri)
-          self._history_selected_robot = item.master.name
-          self.stackedLayout.setCurrentWidget(self.currentMaster)
-          self.on_master_timecheck()
-          if not self.currentMaster.master_info is None and not self.restricted_to_one_master:
-            node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
-            self.ui.syncButton.setEnabled(True)
-            self.ui.syncButton.setChecked(not node is None)
-          else:
-            self.ui.syncButton.setEnabled(False)
-          return
+#     si = self.ui.masterTableView.selectedIndexes()
+#     for index in si:
+#       if index.row() == selected.row():
+    item = self.master_model.itemFromIndex(selected)
+    if not item is None:
+      self._history_selected_robot = item.master.name
+      self.setCurrentMaster(item.master.uri)
+      if not self.currentMaster.master_info is None and not self.restricted_to_one_master:
+        node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
+        self.ui.syncButton.setEnabled(True)
+        self.ui.syncButton.setChecked(not node is None)
+      else:
+        self.ui.syncButton.setEnabled(False)
+      return
     self.ui.launchDock.raise_()
-  
-  def on_masterListView_selection_changed(self, selected, deselected):
+
+  def setCurrentMaster(self, master):
+    '''
+    Changes the view of the master.
+    :param master: the MasterViewProxy object or masteruri
+    :type master: MasterViewProxy or str
+    '''
+    show_user_field = False
+    if isinstance(master, MasterViewProxy):
+      self.currentMaster = master
+      self.stackedLayout.setCurrentWidget(master)
+      show_user_field = not master.is_local
+      self._add_user_to_combo(self.currentMaster.current_user)
+      self.ui.userComboBox.setEditText(self.currentMaster.current_user)
+    elif master is None:
+      self.currentMaster = None
+      self.stackedLayout.setCurrentIndex(0)
+    else: # it's masteruri
+      self.currentMaster = self.getMaster(master)
+      if not self.currentMaster is None:
+        self.stackedLayout.setCurrentWidget(self.currentMaster)
+        show_user_field = not self.currentMaster.is_local
+        self._add_user_to_combo(self.currentMaster.current_user)
+        self.ui.userComboBox.setEditText(self.currentMaster.current_user)
+      else:
+        self.stackedLayout.setCurrentIndex(0)
+    self.ui.user_frame.setVisible(show_user_field)
+    self.on_master_timecheck()
+
+  def _add_user_to_combo(self, user):
+    for i in range(self.ui.userComboBox.count()):
+      if user.lower() == self.ui.userComboBox.itemText(i).lower():
+        return
+    self.ui.userComboBox.addItem(user)
+
+  def on_user_changed(self, user):
+    if not self.currentMaster is None:
+      self.currentMaster.current_user = user
+
+  def on_masterTableView_selection_changed(self, selected, deselected):
     '''
     On selection of a master list.
     '''
     if selected.isValid():
       self.on_master_selection_changed(selected)
-  
+
   def on_all_master_refresh_clicked(self):
     '''
     Retrieves from the master_discovery node the list of all discovered ROS 
     master and get their current state.
     '''
+    # set the timestamp of the current master info back
+    for uri, m in self.masters.items():
+      if not m.master_info is None:
+        check_ts = m.master_info.check_ts
+        m.master_info.timestamp = m.master_info.timestamp - 1.0
+        m.master_info.check_ts = check_ts
     self.masterlist_service.retrieveMasterList(self.getMasteruri(), False)
-  
+
   def on_discover_network_clicked(self):
     try:
       self._discover_dialog.raise_()
@@ -962,7 +1040,8 @@ class MainWindow(QtGui.QMainWindow):
     params_optional = {'Discovery type': ('string', ['master_discovery', 'zeroconf']),
                        'ROS Master Name' : ('string', 'autodetect'),
                        'ROS Master URI' : ('string', 'ROS_MASTER_URI'),
-                       'Static hosts' : ('string', '')
+                       'Static hosts' : ('string', ''),
+                       'Username' : ('string', [self.ui.userComboBox.itemText(i) for i in reversed(range(self.ui.userComboBox.count()))])
                       }
     params = {'Host' : ('string', 'localhost'),
               'Network(0..99)' : ('int', '0'),
@@ -981,6 +1060,7 @@ class MainWindow(QtGui.QMainWindow):
         mastername = params['Optional Parameter']['ROS Master Name']
         masteruri = params['Optional Parameter']['ROS Master URI']
         static_hosts = params['Optional Parameter']['Static hosts']
+        username = params['Optional Parameter']['Username']
         if static_hosts:
           static_hosts = static_hosts.replace(' ', '')
           static_hosts = static_hosts.replace('[', '')
@@ -998,7 +1078,7 @@ class MainWindow(QtGui.QMainWindow):
           self._progress_queue.add2queue(str(self._progress_queue.count()), 
                                          'start discovering on '+str(hostname), 
                                          nm.starter().runNodeWithoutConfig, 
-                                         (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False))
+                                         (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, username))
           self._progress_queue.start()
 
         except (Exception, nm.StartException), e:
@@ -1134,9 +1214,14 @@ class MainWindow(QtGui.QMainWindow):
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
       path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
-        host = nm.nameres().getHostname(self.currentMaster.masteruri) if not self.currentMaster is None else 'localhost'
+        host = 'localhost'
+        username = nm.ssh().USER_DEFAULT
+        if not self.currentMaster is None:
+          host = nm.nameres().getHostname(self.currentMaster.masteruri)
+          username = self.currentMaster.current_user
         params = {'Host' : ('string', host),
-                  'recursive' : ('bool', 'False') }
+                  'recursive' : ('bool', 'False'),
+                  'Username' : ('string', str(username)) }
         dia = ParameterDialog(params)
         dia.setFilterVisible(False)
         dia.setWindowTitle('Transfer file')
@@ -1146,22 +1231,23 @@ class MainWindow(QtGui.QMainWindow):
           try:
             params = dia.getKeywords()
             host = params['Host']
-            rospy.loginfo("TRANSFER the launch file to host %s: %s", str(host), path)
+            rospy.loginfo("TRANSFER the launch file to host %s@%s: %s", str(username), str(host), path)
             recursive = params['recursive']
+            username = params['Username']
             self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
                                            'transfer files to '+str(host), 
                                            nm.starter().transfer_files, 
-                                           (str(host), path))
+                                           (str(host), path, False, username))
             if recursive:
               for f in LaunchConfig.getIncludedFiles(path):
                 self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
                                                'transfer files to '+str(host), 
                                                nm.starter().transfer_files, 
-                                               (str(host), f))
+                                               (str(host), f, False, username))
             self._progress_queue_cfg.start()
           except Exception, e:
             WarningMessageBox(QtGui.QMessageBox.Warning, "Transfer error", 
-                             'Error while parse parameter',
+                             'Error while transfer files',
                               str(e)).exec_()
 
   def _editor_dialog_open(self, files, search_text, trynr=1):
@@ -1234,9 +1320,7 @@ class MainWindow(QtGui.QMainWindow):
             inputDia.setWindowTitle(''.join(['Enter the argv for ', path]))
             if inputDia.exec_():
               params = inputDia.getKeywords()
-              for p,v in params.items():
-                if v:
-                  args.append(''.join([p, ":='", v, "'"]))
+              args.extend(launchConfig.resolveArgs([''.join([p, ":='", v, "'"]) for p,v in params.items() if v]))
             else:
               self.ui.xmlFileView.setEnabled(True)
               self.setCursor(cursor)
@@ -1254,7 +1338,7 @@ class MainWindow(QtGui.QMainWindow):
         self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
                                        'start default config '+str(hostname), 
                                        nm.starter().runNodeWithoutConfig, 
-                                       (str(hostname), 'default_cfg_fkie', 'default_cfg', node_name, args, master_proxy.masteruri, False))
+                                       (str(hostname), 'default_cfg_fkie', 'default_cfg', node_name, args, master_proxy.masteruri, False, master_proxy.current_user))
         self._progress_queue_cfg.start()
       else:
         try:
@@ -1324,14 +1408,24 @@ class MainWindow(QtGui.QMainWindow):
     @param affected: the list of tuples with masteruri and launchfile, which are affected by file change
     @type affected: list
     '''
-    if not changed in self.__in_question:
+    # create a list of launch files and masters, which are affected by the changed file
+    # and are not currently n question
+    new_affected = list()
+    for (muri, lfile) in affected:
+      if not (muri, lfile) in self.__in_question:
+        self.__in_question.add((muri, lfile))
+        new_affected.append((muri, lfile))
+    # if there are no question to reload the launch file -> ask
+    if new_affected:
       choices = dict()
-      for (muri, lfile) in affected:
+      for (muri, lfile) in new_affected:
         master = self.getMaster(muri)
         if not master is None:
           master.launchfile = lfile
           choices[''.join([os.path.basename(lfile), ' [', master.mastername, ']'])] = (master, lfile)
       cfgs = SelectDialog.getValue(''.join(['Update configurations -- ', os.path.basename(changed)]), choices.keys(), False, True, self)
+      for (muri, lfile) in new_affected:
+        self.__in_question.remove((muri, lfile))
       for c in cfgs:
         choices[c][0].launchfiles = choices[c][1]
 
