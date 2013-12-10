@@ -1,3 +1,28 @@
+## multimaster_fkie - 0.3.8-0
+
+User `tiderko@tiderko` released the packages in the `multimaster_fkie` repository by running `/usr/bin/bloom-release multimaster_fkie --track hydro --rosdistro hydro` on `Tue, 10 Dec 2013 13:58:44 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+- rosdistro version: `0.3.7-0`
+- old version: `0.3.7-0`
+- new version: `0.3.8-0`
+
+Versions of tools used:
+- bloom version: `0.4.4`
+- catkin_pkg version: `0.1.24`
+- rosdep version: `0.10.24`
+- rosdistro version: `0.2.17`
+- vcstools version: `0.1.32`
+
+
 ## multimaster_fkie - 0.3.7-0
 
 User `tiderko@tiderko` released the packages in the `multimaster_fkie` repository by running `/usr/bin/bloom-release multimaster_fkie --track groovy --rosdistro groovy` on `Thu, 17 Oct 2013 07:49:03 -0000`
