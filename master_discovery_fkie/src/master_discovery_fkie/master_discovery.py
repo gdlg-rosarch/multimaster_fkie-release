@@ -303,7 +303,9 @@ class Discoverer(threading.Thread):
   ''' the test rate of ROS master state in Hz (Default: 1 Hz). '''
   REMOVE_AFTER = 300
   ''' remove an offline host after this time in [sec] (Default: 300 sec). '''
-  
+
+  NETPACKET_SIZE = 68
+
   def __init__(self, mcast_port, mcast_group, monitor_port):
     '''
     Initialize method for the Discoverer class
@@ -339,10 +341,14 @@ class Discoverer(threading.Thread):
       Discoverer.REMOVE_AFTER = rospy.get_param('~remove_after')
     if rospy.has_param('~static_hosts'):
       self.static_hosts[len(self.static_hosts):] = rospy.get_param('~static_hosts')
+    self._send_mcast = rospy.get_param('~send_mcast', True)
 
+    if not self._send_mcast and not self.static_hosts:
+      rospy.logwarn("This master_discovery is invisible because it send no heart beat messages!")
     rospy.loginfo("Check the ROS Master[Hz]: " + str(Discoverer.ROSMASTER_HZ))
     rospy.loginfo("Heart beat [Hz]: " + str(Discoverer.HEARTBEAT_HZ))
     rospy.loginfo("Static hosts: " + str(self.static_hosts))
+    rospy.loginfo("Approx. network load: %s bytes/s"%str(self.HEARTBEAT_HZ * (self.NETPACKET_SIZE*(len(self.static_hosts) + 1 if self._send_mcast else 0))))
     self.current_check_hz = Discoverer.ROSMASTER_HZ
     self.pubstats = rospy.Publisher("~linkstats", LinkStatesStamped)
 
@@ -351,7 +357,7 @@ class Discoverer(threading.Thread):
     local_addr = roslib.network.get_local_address()
     if (local_addr in ['localhost', '127.0.0.1']):
       sys.exit("'%s' is not reachable for other systems. Change the ROS_MASTER_URI!"% local_addr)
-    
+
     self.mcast_port = mcast_port
     self.mcast_group = mcast_group
     rospy.loginfo("Start broadcasting at ('%s', %d)", mcast_group, mcast_port)
@@ -371,7 +377,7 @@ class Discoverer(threading.Thread):
     self._recvThread = threading.Thread(target = self.recv_loop)
     self._recvThread.setDaemon(True)
     self._recvThread.start()
-    
+
     # create a thread to monitor the ROS master state
     self.master_monitor = MasterMonitor(monitor_port)
     self._masterMonitorThread = threading.Thread(target = self.checkROSMaster_loop)
@@ -437,7 +443,11 @@ class Discoverer(threading.Thread):
         msg = struct.pack(Discoverer.HEARTBEAT_FMT,'R', Discoverer.VERSION, int(Discoverer.HEARTBEAT_HZ*10), int(t), int((t-(int(t))) * 1000000000), self.master_monitor.rpcport, 
                           int(local_t), int((local_t-(int(local_t))) * 1000000000))
         try:
-          self.msocket.send2group(msg)
+          if self._send_mcast: # the mcast traffic can be switched off
+            self.msocket.send2group(msg)
+          else:
+            # to receive own messages, send to localhost
+            self.msocket.send2addr(msg, 'localhost')
           for a in self.static_hosts:
             try:
               self.msocket.send2addr(msg, a)
