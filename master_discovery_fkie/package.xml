@@ -1,13 +1,13 @@
 <package>
   <name>master_discovery_fkie</name>
   <description>
-     A Node to discovery the running ROS Masters in local network. The 
-     discovering is done by send a echo heartbeat messages to a defined 
+     Discover the running ROS Masters in local network. The 
+     discovering is done by sending an echo heartbeat messages to a defined 
      multicast group.
      The alternative is to use a zeroconf/avahi daemon to register the ROS 
      master as service and discover other ROS masters.
   </description>
-  <version>0.3.7</version>
+  <version>0.3.8</version>
   <license>BSD</license>
   <author>Alexander Tiderko</author>
   <maintainer email="alexander.tiderko@gmail.com">Alexander Tiderko</maintainer>
