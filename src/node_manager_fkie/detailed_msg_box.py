@@ -34,40 +34,47 @@ from python_qt_binding import QtGui
 
 class DetailedError(Exception):
   ''' '''
-  
+
   def __init__(self, title, text, detailed_text=""):
     self.title = title
     self.value = text
     self.detailed_text = detailed_text
-  
+
   def __str__(self):
     return repr(self.text) + ":::" + self.detailed_text
-  
+
 
 class WarningMessageBox(QtGui.QMessageBox):
+
   def __init__(self, icon, title, text, detailed_text="", buttons=QtGui.QMessageBox.Ok):
     QtGui.QMessageBox.__init__(self, icon, title, text, buttons)
     if detailed_text:
-#      self.setSizeGripEnabled(True)
       self.setDetailedText(detailed_text)
 #            self.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
 #            self.setSizeGripEnabled(True)
       horizontalSpacer = QtGui.QSpacerItem(480, 0, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
       layout = self.layout()
       layout.addItem(horizontalSpacer, layout.rowCount(), 0, 1, layout.columnCount())
-    self.setEscapeButton(QtGui.QMessageBox.Ok)
-#    self.setMinimumHeight(0)
-#    self.setMaximumHeight(800)
-#    self.setMinimumWidth(0)
-#    self.setMaximumWidth(800)
-#    self.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
-    textEdit = self.findChild(QtGui.QTextEdit)
+
+    if QtGui.QMessageBox.Abort & buttons:
+      self.setEscapeButton(QtGui.QMessageBox.Abort)
+    if QtGui.QMessageBox.Ignore & buttons:
+      self.setEscapeButton(QtGui.QMessageBox.Ignore)
+
+    self.textEdit = textEdit = self.findChild(QtGui.QTextEdit)
     if textEdit != None :
       textEdit.setMinimumHeight(0)
       textEdit.setMaximumHeight(600)
       textEdit.setMinimumWidth(0)
       textEdit.setMaximumWidth(600)
       textEdit.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
+
+    self.ignore_all_btn = QtGui.QPushButton('Don\'t display again')
+    self.addButton(self.ignore_all_btn, QtGui.QMessageBox.HelpRole)
+
+  def paintEvent (self, event):
+    QtGui.QMessageBox.paintEvent(self, event)
+    self.ignore_all_btn.setVisible(self.textEdit.isVisible())
 
 #  def event(self, e):
 #    print "TYPE:", e.type()
