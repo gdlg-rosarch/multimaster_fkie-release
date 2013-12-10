@@ -63,7 +63,7 @@ class TopicItem(QtGui.QStandardItem):
     @param name: the topic name
     @type name: C{str}
     '''
-    QtGui.QStandardItem.__init__(self, self.toHTML(name))
+    QtGui.QStandardItem.__init__(self, name)
     self.parent_item = parent
     '''@ivar: service info as L{master_discovery_fkie.ServiceInfo}.'''
     self._publish_thread = None
@@ -163,23 +163,6 @@ class TopicItem(QtGui.QStandardItem):
     WarningMessageBox(QtGui.QMessageBox.Warning, "Publish error", 
                   'Error while publish to %s'%self.topic.name,
                   str(msg)).exec_()
-
-  @classmethod
-  def toHTML(cls, topic_name):
-    '''
-    Creates a HTML representation of the topic name.
-    @param topic_name: the topic name
-    @type topic_name: C{str}
-    @return: the HTML representation of the topic name
-    @rtype: C{str}
-    '''
-    ns, sep, name = topic_name.rpartition('/')
-    result = ''
-    if sep:
-      result = ''.join(['<div>', '<span style="color:gray;">', str(ns), sep, '</span><b>', name, '</b></div>'])
-    else:
-      result = name
-    return result
 
   def type(self):
     return TopicItem.ITEM_TYPE
@@ -307,7 +290,7 @@ class TopicModel(QtGui.QStandardItemModel):
         for i in range(root.rowCount()):
           if not topic_name in updated_topics:
             topicItem = root.child(i)
-            if cmp(topicItem.topic.name.lower(), topic_name.lower()) > 0:
+            if cmp(topicItem.topic.name, topic_name) > 0:
               new_item_row = TopicItem.getItemList(topic, root)
               root.insertRow(i, new_item_row)
               self.pyqt_workaround[topic_name] = new_item_row[0] # workaround for using with PyQt: store the python object to keep the defined attributes in the TopicItem subclass
@@ -327,3 +310,25 @@ class TopicModel(QtGui.QStandardItemModel):
 #    cputimes = os.times()
 #    cputime = cputimes[0] + cputimes[1] - cputime_init
 #    print "      update topic ", cputime, ", topic count:", len(topics)
+
+  def index_from_names(self, publisher, subscriber):
+    '''
+    Returns for given topics the list of QModelIndex in this model.
+    :param publisher: the list of publisher topics
+    :type publisher: [str, ...]
+    :param subscriber: the list of subscriber topics
+    :type subscriber: [str, ...]
+    :return: the list of QModelIndex
+    :rtype: [QtCore.QModelIndex, ...]
+    '''
+    result = []
+    root = self.invisibleRootItem()
+    for i in range(root.rowCount()):
+      topicItem = root.child(i)
+      if topicItem.topic.name in publisher:
+        result.append(self.index(i, 0))
+        result.append(self.index(i, 1)) # select also the publishers column
+      if topicItem.topic.name in subscriber:
+        result.append(self.index(i, 0))
+        result.append(self.index(i, 2)) # select also the subscribers column
+    return result

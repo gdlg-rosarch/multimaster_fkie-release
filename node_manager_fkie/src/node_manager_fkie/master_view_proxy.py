@@ -41,6 +41,7 @@ import socket
 import xmlrpclib
 import threading
 import time
+import getpass
 from urlparse import urlparse
 
 import rospy
@@ -85,12 +86,15 @@ class MasterViewProxy(QtGui.QWidget):
 
   description_signal  = QtCore.Signal(str, str)
   '''@ivar: the signal is emitted to show a description (title, description)'''
-  
+
   request_xml_editor = QtCore.Signal(list, str)
   '''@ivar: the signal to open a xml editor dialog (list with files, search text)'''
 
   stop_nodes_signal = QtCore.Signal(str, list)
   '''@ivar: the signal is emitted to stop on masteruri the nodes described in the list.'''
+
+  robot_icon_updated = QtCore.Signal(str, str)
+  '''@ivar: the signal is emitted, if the robot icon was changed by a configuration (masteruri, path)'''
 
   def __init__(self, masteruri, parent=None):
     '''
@@ -126,6 +130,9 @@ class MasterViewProxy(QtGui.QWidget):
     self.__last_info_text = None
     self.__use_sim_time = False
     self.__current_user = nm.ssh().USER_DEFAULT
+    self.__robot_icons = []
+    self.__current_robot_icon = None
+    self.__current_parameter_robot_icon = ''
 
     self.default_cfg_handler = DefaultConfigHandler()
     self.default_cfg_handler.node_list_signal.connect(self.on_default_cfg_nodes_retrieved)
@@ -166,7 +173,9 @@ class MasterViewProxy(QtGui.QWidget):
     for i, (name, width) in enumerate(TopicModel.header):
       self.masterTab.topicsView.setColumnWidth(i, width)
     self.topicNameDelegate = HTMLDelegate()
+    self.topicTypeDelegate = HTMLDelegate()
     self.masterTab.topicsView.setItemDelegateForColumn(0, self.topicNameDelegate)
+    self.masterTab.topicsView.setItemDelegateForColumn(3, self.topicTypeDelegate)
     sm = self.masterTab.topicsView.selectionModel()
     sm.selectionChanged.connect(self.on_topic_selection_changed)
     self.masterTab.topicsView.activated.connect(self.on_topic_activated)
@@ -252,40 +261,52 @@ class MasterViewProxy(QtGui.QWidget):
     self.parameterHandler_sim.parameter_values_signal.connect(self._on_sim_param_values)
 #    self.parameterHandler_sim.delivery_result_signal.connect(self._on_delivered_values)
 
-
     # creates a start menu
-    start_menu = QtGui.QMenu(self)
-    self.forceStartNodesAct = QtGui.QAction("&Force start node", self, statusTip="Force the start of selected node", triggered=self.on_force_start_nodes)
-    start_menu.addAction(self.forceStartNodesAct)
-    self.startNodesAtHostAct = QtGui.QAction("&Start node on host(Loaded config needed)", self, statusTip="Start node on other host", triggered=self.on_start_nodes_at_host)
-    start_menu.addAction(self.startNodesAtHostAct)
-    self.masterTab.startButton.setMenu(start_menu)
+#     start_menu = QtGui.QMenu(self)
+#     self.forceStartNodesAct = QtGui.QAction("&Force start node", self, statusTip="Force the start of selected node", triggered=self.on_force_start_nodes)
+#     start_menu.addAction(self.forceStartNodesAct)
+#     self.startNodesAtHostAct = QtGui.QAction("&Start node on host(Loaded config needed)", self, statusTip="Start node on other host", triggered=self.on_start_nodes_at_host)
+#     start_menu.addAction(self.startNodesAtHostAct)
+#     self.masterTab.startButton.setMenu(start_menu)
+
+#     self._shortcut_start_node_force = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+Shift+P", "Force the start of selected node")), self)
+#     self._shortcut_start_node_force.activated.connect(self.on_force_start_nodes)
+#     self._shortcut_start_node_at_host = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl++Shift+H", "Start node on other host")), self)
+#     self._shortcut_start_node_at_host.activated.connect(self.on_start_nodes_at_host)
 
     # creates a stop menu
-    stop_menu = QtGui.QMenu(self)
-    self.killNodesAct = QtGui.QAction("&Kill Node", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_Backspace), statusTip="Kill selected node", triggered=self.on_kill_nodes)
-    self.unregNodesAct = QtGui.QAction("&Unregister Nodes", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_Delete), statusTip="Removes the registration of selected nodes from ROS master", triggered=self.on_unregister_nodes)
-    stop_menu.addAction(self.killNodesAct)
-    stop_menu.addAction(self.unregNodesAct)
-    self.masterTab.stopButton.setMenu(stop_menu)
+    self._shortcut_kill_node = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+Backspace", "Kill selected node")), self)
+    self._shortcut_kill_node.activated.connect(self.on_kill_nodes)
+    self._shortcut_kill_node = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+Delete", "Removes the registration of selected nodes from ROS master")), self)
+    self._shortcut_kill_node.activated.connect(self.on_unregister_nodes)
+#     stop_menu = QtGui.QMenu(self)
+#     self.killNodesAct = QtGui.QAction("&Kill Node", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_Backspace), statusTip="Kill selected node", triggered=self.on_kill_nodes)
+#     self.unregNodesAct = QtGui.QAction("&Unregister Nodes", self, shortcut=QtGui.QKeySequence(QtCore.Qt.CTRL + QtCore.Qt.Key_Delete), statusTip="Removes the registration of selected nodes from ROS master", triggered=self.on_unregister_nodes)
+#     stop_menu.addAction(self.killNodesAct)
+#     stop_menu.addAction(self.unregNodesAct)S
+#     self.masterTab.stopButton.setMenu(stop_menu)
 
     # creates a screen menu
-    screen_menu = QtGui.QMenu(self)
-    self.killScreensAct = QtGui.QAction("&Kill Screen", self, shortcut=QtGui.QKeySequence(QtCore.Qt.SHIFT + QtCore.Qt.Key_Backspace), statusTip="Kill available screens", triggered=self.on_kill_screens)
-    screen_menu.addAction(self.killScreensAct)
-    self.showAllScreensAct = QtGui.QAction("&Show all available screens", self, shortcut=QtGui.QKeySequence(QtCore.Qt.SHIFT + QtCore.Qt.Key_S), statusTip="Shows all available screens", triggered=self.on_show_all_screens)
-    screen_menu.addAction(self.showAllScreensAct)
-    self.masterTab.ioButton.setMenu(screen_menu)
+#     screen_menu = QtGui.QMenu(self)
+#     self.killScreensAct = QtGui.QAction("&Kill Screen", self, shortcut=QtGui.QKeySequence(QtCore.Qt.SHIFT + QtCore.Qt.Key_Backspace), statusTip="Kill available screens", triggered=self.on_kill_screens)
+#     screen_menu.addAction(self.killScreensAct)
+#     self.showAllScreensAct = QtGui.QAction("&Show all available screens", self, shortcut=QtGui.QKeySequence(QtCore.Qt.SHIFT + QtCore.Qt.Key_S), statusTip="Shows all available screens", triggered=self.on_show_all_screens)
+#     screen_menu.addAction(self.showAllScreensAct)
+#     self.masterTab.ioButton.setMenu(screen_menu)
     self.masterTab.ioButton.setEnabled(True)
+    self._shortcut_screen_show_all = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Shift+S", "Show all available screens")), self)
+    self._shortcut_screen_show_all.activated.connect(self.on_show_all_screens)
+    self._shortcut_screen_kill = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Shift+Backspace", "Kill Screen")), self)
+    self._shortcut_screen_kill.activated.connect(self.on_kill_screens)
+
 
     # create log menu
-    log_menu = QtGui.QMenu(self)
-    self.logCopyPathAct = QtGui.QAction("&Copy log path to clipboard", self, statusTip="Copy log path to clipboard", triggered=self.on_log_path_copy)
-#    self.logShowSelectedAct = QtGui.QAction("&Select a log to show", self, statusTip="Select a log file to show (only local)", triggered=self.on_log_show_selected)
-    log_menu.addAction(self.logCopyPathAct)
-#    self.logCopyPathAct.setEnabled(nm.is_local(nm.nameres().getHostname(self.masteruri)))
-#    log_menu.addAction(self.logShowSelectedAct)
-    self.masterTab.logButton.setMenu(log_menu)
+#     self._shortcut_log1 = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Alt+L", "Copy log path to clipboard")), self)
+#     self._shortcut_log1.activated.connect(self.on_log_path_copy)
+#     log_menu = QtGui.QMenu(self)
+#     self.logCopyPathAct = QtGui.QAction("&Copy log path to clipboard", self, statusTip="Copy log path to clipboard", triggered=self.on_log_path_copy)
+#     log_menu.addAction(self.logCopyPathAct)
+#     self.masterTab.logButton.setMenu(log_menu)
 
     # set the shortcuts
     self._shortcut1 = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Alt+1", "Select first group")), self)
@@ -308,24 +329,19 @@ class MasterViewProxy(QtGui.QWidget):
     self._shortcut_stop = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Alt+S", "stop selected nodes")), self)
     self._shortcut_stop.activated.connect(self.on_stop_clicked)
 
-    self._shortcut_copy = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+C", "copy selected nodes to clipboard")), self.masterTab.nodeTreeView)
-    self._shortcut_copy.activated.connect(self.on_copy_node_clicked)
-    self._shortcut_copy = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+C", "copy selected topics to clipboard")), self.masterTab.topicsView)
-    self._shortcut_copy.activated.connect(self.on_copy_topic_clicked)
-    self._shortcut_copy = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+C", "copy selected services to clipboard")), self.masterTab.servicesView)
-    self._shortcut_copy.activated.connect(self.on_copy_service_clicked)
-    self._shortcut_copy = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+C", "copy selected parameter to clipboard")), self.masterTab.parameterView)
-    self._shortcut_copy.activated.connect(self.on_copy_parameter_clicked)
+    self._shortcut_copy = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Ctrl+X", "copy selected alternative values to clipboard")), self)
+    self._shortcut_copy.activated.connect(self.on_copy_x_pressed)
 
 #    print "================ create", self.objectName()
 #
 #  def __del__(self):
-#    for ps in self.__echo_topics_dialogs.values():
-#      try:
-#        ps.terminate()
-#      except:
-#        pass
-#    print "*********** destroy", self.objectName()
+#    print "    Destroy mester view proxy", self.objectName(), " ..."
+#     for ps in self.__echo_topics_dialogs.values():
+#       try:
+#         ps.terminate()
+#       except:
+#         pass
+#    print "    ", self.objectName(), "destroyed"
 
   def stop(self):
     print "  Shutdown master", self.masteruri, "..."
@@ -412,7 +428,7 @@ class MasterViewProxy(QtGui.QWidget):
       self.on_node_selection_changed(None, None)
       self.on_topic_selection_changed(None, None)
       self.on_service_selection_changed(None, None)
-      self.parameterHandler_sim.requestParameterValues(self.masteruri, ["/use_sim_time"])
+      self.parameterHandler_sim.requestParameterValues(self.masteruri, ["/use_sim_time", "/robot_icon"])
     except:
       import traceback
       print traceback.format_exc()
@@ -514,7 +530,7 @@ class MasterViewProxy(QtGui.QWidget):
     if len(selectedNodes) >= 1:
       cfg_enable = len(self._getCfgChoises(selectedNodes[0], True)) > 0
     self.masterTab.editConfigButton.setEnabled(cfg_enable and len(selectedNodes) == 1)
-    self.startNodesAtHostAct.setEnabled(cfg_enable)
+#    self.startNodesAtHostAct.setEnabled(cfg_enable)
     self.masterTab.editRosParamButton.setEnabled(len(selectedNodes) == 1)
     self.masterTab.saveButton.setEnabled(len(self.launchfiles) > 1)
     # enable the close button only for local configurations
@@ -600,7 +616,7 @@ class MasterViewProxy(QtGui.QWidget):
       self.__configs[launchfile] = launchConfig
       self.appendConfigToModel(launchfile, launchConfig.Roscfg)
       self.masterTab.tabWidget.setCurrentIndex(0)
-      
+
       #get the descriptions of capabilities and hosts
       try:
         robot_descr = launchConfig.getRobotDescr()
@@ -646,9 +662,12 @@ class MasterViewProxy(QtGui.QWidget):
         nodes2start = [n for n in nodes2start if not re.search(r"\d{3,6}_\d{10,}", n)]
         # restart nodes
         if nodes2start:
-          restart = SelectDialog.getValue('The parameter/nodes are changed. Restart follow nodes?', nodes2start, False, True, self)
+          restart = SelectDialog.getValue('Restart nodes?', "Select nodes to restart <b>@%s</b>:"%self.mastername, nodes2start, False, True, self)
           self.start_nodes_by_name(restart, launchfile, True)
-
+      # set the robot_icon
+      if launchfile in self.__robot_icons:
+        self.__robot_icons.remove(launchfile)
+      self.__robot_icons.insert(0, launchfile)
 #      print "MASTER:", launchConfig.Roscfg.master
 #      print "NODES_CORE:", launchConfig.Roscfg.nodes_core
 #      for n in launchConfig.Roscfg.nodes:
@@ -678,6 +697,28 @@ class MasterViewProxy(QtGui.QWidget):
     except:
       import traceback
       print traceback.print_exc()
+    self.update_robot_icon(True)
+
+  def update_robot_icon(self, force=False):
+    '''
+    Update the current robot icon. If the icon was changed a `robot_icon_updated` 
+    signal will be emitted.
+    :return: the path to the current robot icon
+    :rtype: str
+    '''
+    for l in self.__robot_icons:
+      try:
+        icon = self.__configs[l].get_robot_icon()
+        if icon:
+          if icon != self.__current_robot_icon or force:
+            self.__current_robot_icon = icon
+            self.robot_icon_updated.emit(self.masteruri, icon)
+          return icon
+      except:
+        pass
+    self.__current_robot_icon = self.__current_parameter_robot_icon
+    self.robot_icon_updated.emit(self.masteruri, str(self.__current_robot_icon))
+    return self.__current_robot_icon
 
   def appendConfigToModel(self, launchfile, rosconfig):
     '''
@@ -704,7 +745,7 @@ class MasterViewProxy(QtGui.QWidget):
     for ((masteruri, addr), nodes) in hosts.items():
       self.node_tree_model.appendConfigNodes(masteruri, addr, nodes)
     self.updateButtons()
-      
+
   def removeConfigFromModel(self, launchfile):
     '''
     Update the node view after removed configuration.
@@ -752,7 +793,7 @@ class MasterViewProxy(QtGui.QWidget):
       if not descr_service is None:
         self.default_cfg_handler.requestDescriptionList(descr_service.uri, descr_service.name)
     self.updateButtons()
-    
+
   def on_default_cfg_nodes_retrieved(self, service_uri, config_name, nodes):
     '''
     Handles the new list with nodes from default configuration service.
@@ -941,66 +982,101 @@ class MasterViewProxy(QtGui.QWidget):
     '''
     if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Nodes':
       return
-    selectedHosts = self.hostsFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+    self.masterTab.topicsView.selectionModel().clear()
+    self.masterTab.servicesView.selectionModel().clear()
+    selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
     name = ''
     text = ''
-    if len(selectedHosts) == 1:
+    selectedHosts = self.hostsFromIndexes(selections)
+    # add host description, if only the one host is selected
+    if len(selectedHosts) == 1 and len(selections) / 2 == 1:
       host = selectedHosts[0]
       name = ' - '.join([host.name, 'Robot'])
       text = host.generateDescription()
+      text = ''.join([text, '<br>'])
     else:
-      selectedGroups = self.groupsFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-      if len(selectedGroups) == 1:
+      # add group description, if only the one group is selected
+      selectedGroups = self.groupsFromIndexes(selections)
+      if len(selectedGroups) == 1 and len(selections) / 2 == 1:
         group = selectedGroups[0]
         name = ' - '.join([group.name, 'Group'])
         text = group.generateDescription()
-      else:
-        selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-        if len(selectedNodes) == 1:
-          # create description for a node
-          node = selectedNodes[0]
-          ns, sep, name = node.name.rpartition(rospy.names.SEP)
-          text = ''.join(['<font size="+1"><b>', '<span style="color:gray;">', str(ns), sep, '</span><b>', str(name), '</b></font><br>'])
-          text = ''.join([text, '<a href="restart_node://', node.name,'">', 'restart</a> - '])
-          text = ''.join([text, '<a href="kill_node://', node.name,'">', 'kill</a> - '])
-          text = ''.join([text, '<a href="kill_screen://', node.name,'">', 'kill screen</a>  '])
-          text = ''.join([text, '<p>'])
-          text = ''.join([text, '<dl>'])
-          text = ''.join([text, '<dt><b>URI</b>: ', str(node.node_info.uri), '</dt>'])
-          text = ''.join([text, '<dt><b>PID</b>: ', str(node.node_info.pid), '</dt>'])
-          text = ''.join([text, '<dt><b>ORG.MASTERURI</b>: ', str(node.node_info.masteruri), '</dt>'])
-          if node.is_ghost:
-            if node.name.endswith('master_sync') or node.name.endswith('node_manager'):
-              text = ''.join([text, '<dt><font color="#FF9900"><b>This node is not synchronized by default. To get info about this node select the related host.</b></font></dt>'])
-            else:
-              text = ''.join([text, '<dt><font color="#FF9900"><b>The node is running on remote host, but is not synchronized, because of filter or errors while sync, see log of <i>master_sync</i></b></font></dt>'])
-              text = ''.join([text, '<dt><font color="#FF9900"><i>Are you use the same ROS packages?</i></font></dt>'])
-          if node.has_running and node.node_info.pid is None and node.node_info.uri is None:
-            text = ''.join([text, '<dt><font color="#FF9900"><b>Where are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</b></font></dt>'])
-          if not node.node_info.uri is None and node.node_info.masteruri != self.masteruri:
-            text = ''.join([text, '<dt><font color="#339900"><b>synchronized</b></font></dt>'])
-          if node.node_info.pid is None and not node.node_info.uri is None:
-            if not node.node_info.isLocal:
-              text = ''.join([text, '<dt><font color="#FF9900"><b>remote nodes will not be ping, so they are always marked running</b></font>'])
-            else:
-              text = ''.join([text, '<dt><font color="#CC0000"><b>the node does not respond: </b></font>'])
-              text = ''.join([text, '<a href="unregister_node://', node.name,'">', 'unregister</a></dt>'])
-          text = ''.join([text, '</dl>'])
-          text = ''.join([text, self._create_html_list('Published Topics:', node.published, 'TOPIC')])
-          text = ''.join([text, self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC')])
-          text = ''.join([text, self._create_html_list('Services:', node.services, 'SERVICE')])
-          launches = []
-          default_cfgs = []
-          for c in node.cfgs:
-            if isinstance(c, tuple):
-              default_cfgs.append(c[0])
-            else:
-              launches.append(c)
-          text = ''.join([text, self._create_html_list('Loaded Launch Files:', launches, 'LAUNCH')])
-          text = ''.join([text, self._create_html_list('Default Configurations:', default_cfgs)])
-          text = ''.join([text, '<dt><a href="copy_log_path://', node.name,'">', 'copy log path to clipboard</a></dt>'])
-          text = ''.join(['<div>', text, '</div>'])
-          name = node.name
+        text = ''.join([text, '<br>'])
+    # add node description for one selected node
+    selectedNodes = self.nodesFromIndexes(selections)
+    if len(selectedNodes) == 1:
+      node = selectedNodes[0]
+      # select the topics of the node in the "Topic" view
+      selected_topics = self.topic_model.index_from_names(node.published, node.subscribed)
+      for s in selected_topics:
+        self.masterTab.topicsView.selectionModel().select(self.topic_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
+      # select the services of the node in the "Services" view
+      selected_services = self.service_model.index_from_names(node.services)
+      for s in selected_services:
+        self.masterTab.servicesView.selectionModel().select(self.service_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
+      # create description for a node
+      ns, sep, name = node.name.rpartition(rospy.names.SEP)
+      text = ''.join(['<font size="+1"><b>', '<span style="color:gray;">', str(ns), sep, '</span><b>', str(name), '</b></font><br>'])
+      launches = [c for c in node.cfgs if not isinstance(c, tuple)]
+      default_cfgs = [c[0] for c in node.cfgs if isinstance(c, tuple)]
+      if launches or default_cfgs:
+        text = ''.join([text, '<a href="restart_node://', node.name,'">', 'restart</a> - '])
+      text = ''.join([text, '<a href="kill_node://', node.name,'">', 'kill</a> - '])
+      text = ''.join([text, '<a href="kill_screen://', node.name,'">', 'kill screen</a><br>'])
+      if launches:
+        text = ''.join([text, '<a href="start_node_at_host://', node.name, '">', 'start@host</a>'])
+      text = ''.join([text, '<p>'])
+      text = ''.join([text, '<dl>'])
+      text = ''.join([text, '<dt><b>URI</b>: ', str(node.node_info.uri), '</dt>'])
+      text = ''.join([text, '<dt><b>PID</b>: ', str(node.node_info.pid), '</dt>'])
+      text = ''.join([text, '<dt><b>ORG.MASTERURI</b>: ', str(node.node_info.masteruri), '</dt>'])
+      if node.is_ghost:
+        if node.name.endswith('master_sync') or node.name.endswith('node_manager'):
+          text = ''.join([text, '<dt><font color="#FF9900"><b>This node is not synchronized by default. To get info about this node select the related host.</b></font></dt>'])
+        else:
+          text = ''.join([text, '<dt><font color="#FF9900"><b>The node is running on remote host, but is not synchronized, because of filter or errors while sync, see log of <i>master_sync</i></b></font></dt>'])
+          text = ''.join([text, '<dt><font color="#FF9900"><i>Are you use the same ROS packages?</i></font></dt>'])
+      if node.has_running and node.node_info.pid is None and node.node_info.uri is None:
+        text = ''.join([text, '<dt><font color="#FF9900"><b>Where are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</b></font></dt>'])
+      if not node.node_info.uri is None and node.node_info.masteruri != self.masteruri:
+        text = ''.join([text, '<dt><font color="#339900"><b>synchronized</b></font></dt>'])
+      if node.node_info.pid is None and not node.node_info.uri is None:
+        if not node.node_info.isLocal:
+          text = ''.join([text, '<dt><font color="#FF9900"><b>remote nodes will not be ping, so they are always marked running</b></font>'])
+        else:
+          text = ''.join([text, '<dt><font color="#CC0000"><b>the node does not respond: </b></font>'])
+          text = ''.join([text, '<a href="unregister_node://', node.name,'">', 'unregister</a></dt>'])
+      text = ''.join([text, '</dl>'])
+      text = ''.join([text, self._create_html_list('Published Topics:', node.published, 'TOPIC')])
+      text = ''.join([text, self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC')])
+      text = ''.join([text, self._create_html_list('Services:', node.services, 'SERVICE')])
+      # set loaunch file paths
+      text = ''.join([text, self._create_html_list('Loaded Launch Files:', launches, 'LAUNCH')])
+      text = ''.join([text, self._create_html_list('Default Configurations:', default_cfgs)])
+      text = ''.join([text, '<dt><a href="copy_log_path://', node.name,'">', 'copy log path to clipboard</a></dt>'])
+      text = ''.join(['<div>', text, '</div>'])
+      name = node.name
+    elif len(selectedNodes) > 1:
+#      stoppable_nodes = [sn for sn in selectedNodes if not sn.node_info.uri is None and not self._is_in_ignore_list(sn.name)]
+      restartable_nodes = [sn for sn in selectedNodes if len(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
+      killable_nodes = [sn for sn in selectedNodes if not sn.node_info.pid is None and not self._is_in_ignore_list(sn.name)]
+      unregisterble_nodes = [sn for sn in selectedNodes if sn.node_info.pid is None and not sn.node_info.uri is None and sn.node_info.isLocal and not self._is_in_ignore_list(sn.name)]
+      # add description for multiple selected nodes
+      if restartable_nodes or killable_nodes or unregisterble_nodes:
+        text = ''.join([text, '<b>Selected nodes:</b><br>'])
+      if restartable_nodes:
+        text = ''.join([text, '<a href="restart_node://all_selected_nodes">', 'restart [', str(len(restartable_nodes)),']</a>'])
+        if killable_nodes or unregisterble_nodes:
+          text = ''.join([text, ' - '])
+      if killable_nodes:
+        text = ''.join([text, '<a href="kill_node://all_selected_nodes">', 'kill [', str(len(killable_nodes)),']</a> - '])
+        text = ''.join([text, '<a href="kill_screen://all_selected_nodes">', 'kill screen [', str(len(killable_nodes)),']</a>'])
+        if unregisterble_nodes:
+          text = ''.join([text, ' - '])
+      if unregisterble_nodes:
+        text = ''.join([text, '<a href="unregister_node://all_selected_nodes">', 'unregister [', str(len(unregisterble_nodes)),']</a>'])
+      if restartable_nodes:
+        text = ''.join([text, '<br><a href="start_node_at_host://all_selected_nodes">', 'start@host [', str(len(restartable_nodes)),']</a>'])
 
     if self.__last_info_type == 'Node' and (self.__last_info_text != text or force_emit):
       self.__last_info_text = text
@@ -1012,13 +1088,13 @@ class MasterViewProxy(QtGui.QWidget):
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of selected topic
     '''
-    if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Topics':
-      return
     selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
     topics_selected = (len(selectedTopics) > 0)
     self.masterTab.echoTopicButton.setEnabled(topics_selected)
     self.masterTab.hzTopicButton.setEnabled(topics_selected)
     self.masterTab.pubStopTopicButton.setEnabled(topics_selected)
+    if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Topics':
+      return
     if len(selectedTopics) == 1:
       topic = selectedTopics[0]
       ns, sep, name = topic.name.rpartition(rospy.names.SEP)
@@ -1065,10 +1141,10 @@ class MasterViewProxy(QtGui.QWidget):
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of selected service
     '''
-    if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Services':
-      return
     selectedServices = self.servicesFromIndexes(self.masterTab.servicesView.selectionModel().selectedIndexes())
     self.masterTab.callServiceButton.setEnabled(len(selectedServices) > 0)
+    if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Services':
+      return
     if len(selectedServices) == 1:
       service = selectedServices[0]
       ns, sep, name = service.name.rpartition(rospy.names.SEP)
@@ -1370,7 +1446,7 @@ class MasterViewProxy(QtGui.QWidget):
     if len(choices) == 1:
       value = choices.keys()[0]
     elif len(choices) > 0:
-      items = SelectDialog.getValue('Configuration selection', choices.keys(), True)
+      items = SelectDialog.getValue('Configuration selection', 'Select configuration to launch <b>%s</b>'%nodename, choices.keys(), True)
       if items:
         value = items[0]
     return value
@@ -1627,7 +1703,7 @@ class MasterViewProxy(QtGui.QWidget):
       sel_screen = []
       try:
         screens = nm.screen().getActiveScreens(host, auto_pw_request=True, user=self.current_user)
-        sel_screen = SelectDialog.getValue('Open screen', screens, False, False, self)
+        sel_screen = SelectDialog.getValue('Open screen', '', screens, False, False, self)
       except Exception, e:
         rospy.logwarn("Error while get screen list: %s", str(e))
         WarningMessageBox(QtGui.QMessageBox.Warning, "Screen list error", 
@@ -1686,7 +1762,7 @@ class MasterViewProxy(QtGui.QWidget):
       socket.setdefaulttimeout(3)
       path_on_host = nm.starter().copylogPath2Clipboards(host, nodenames, True)
       socket.setdefaulttimeout(None)
-      QtGui.QApplication.clipboard().setText(''.join([self.current_user, '@', host, ':', path_on_host]))
+      QtGui.QApplication.clipboard().setText(''.join([getpass.getuser() if self.is_local else self.current_user, '@', host, ':', path_on_host]))
     except Exception as e:
       WarningMessageBox(QtGui.QMessageBox.Warning, "Get log path", 
                         'Error while get log path',
@@ -1701,7 +1777,7 @@ class MasterViewProxy(QtGui.QWidget):
 #    try:
 #      nm.screen().LOG_PATH.
 #      screens = nm.screen().getActiveScreens(host, auto_pw_request=True)
-#      sel_screen = SelectDialog.getValue('Open log', screens, False, self)
+#      sel_screen = SelectDialog.getValue('Open log', '', screens, False, self)
 #    except Exception, e:
 #      rospy.logwarn("Error while get screen list: %s", str(e))
 #      WarningMessageBox(QtGui.QMessageBox.Warning, "Screen list error", 
@@ -1733,7 +1809,7 @@ class MasterViewProxy(QtGui.QWidget):
           if len(nodes) == 1:
             items = nodes
           elif len(nodes) > 1:
-            items = SelectDialog.getValue('Dynamic configuration selection', [i for i in nodes])
+            items = SelectDialog.getValue('Dynamic configuration selection', '', [i for i in nodes])
             if items is None:
               items = []
           if len(items) > 3:
@@ -1830,7 +1906,7 @@ class MasterViewProxy(QtGui.QWidget):
     cfgs = []
     
 #    if len(choices) > 1:
-    cfgs = SelectDialog.getValue('Close configurations', choices.keys(), False, False, self)
+    cfgs = SelectDialog.getValue('Close configurations', '', choices.keys(), False, False, self)
 #    elif len(choices) == 1:
 #      cfgs = choices.values()[0]
 
@@ -1838,6 +1914,7 @@ class MasterViewProxy(QtGui.QWidget):
     for c in cfgs:
       self._close_cfg(choices[c])
     self.updateButtons()
+    self.update_robot_icon()
 
   def _close_cfg(self, cfg):
     try:
@@ -2009,7 +2086,6 @@ class MasterViewProxy(QtGui.QWidget):
         topic_prefix = ''.join(['/rostopic_pub', topic.name, '_'])
         node_names = self.master_info.node_names
         for n in node_names:
-          
           if n.startswith(topic_prefix):
             nodes2stop.append(n)
       self.stop_nodes_by_name(nodes2stop)
@@ -2019,8 +2095,13 @@ class MasterViewProxy(QtGui.QWidget):
     Shows the output of the topic in a terminal.
     '''
     selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
-    for topic in selectedTopics:
-      self._add_topic_output2queue(topic, show_hz_only)
+    ret = True
+    if len(selectedTopics) > 5:
+      ret = QtGui.QMessageBox.question(self, "Show echo", "You are going to open the echo of "+ str(len(selectedTopics)) + " topics at once\nContinue?", QtGui.QMessageBox.Ok, QtGui.QMessageBox.Cancel)
+      ret = (ret == QtGui.QMessageBox.Ok)
+    if ret:
+      for topic in selectedTopics:
+        self._add_topic_output2queue(topic, show_hz_only)
 
   def show_topic_output(self, topic_name, show_hz_only):
     '''
@@ -2037,7 +2118,7 @@ class MasterViewProxy(QtGui.QWidget):
         import os, shlex, subprocess
         env = dict(os.environ)
         env["ROS_MASTER_URI"] = str(self.masteruri)
-        cmd = ' '.join(['rosrun', 'node_manager_fkie', 'node_manager', '-t', topic.name, topic.type, '--hz' if show_hz_only else '', ''.join(['__name:=echo_','hz_' if show_hz_only else '',str(nm.nameres().getHostname(self.masteruri)), topic.name])])
+        cmd = ' '.join(['rosrun', 'node_manager_fkie', 'node_manager', '--echo', topic.name, topic.type, '--hz' if show_hz_only else '', ''.join(['__name:=echo_','hz_' if show_hz_only else '',str(nm.nameres().getHostname(self.masteruri)), topic.name])])
         rospy.loginfo("Echo topic: %s", cmd)
         ps = subprocess.Popen(shlex.split(cmd), env=env, close_fds=True)
         self.__echo_topics_dialogs[topic.name] = ps
@@ -2305,14 +2386,21 @@ class MasterViewProxy(QtGui.QWidget):
     @param params: The dictionary the parameter names and request result.
     @type param: C{dict(paramName : (code, statusMessage, parameterValue))}
     '''
+    robot_icon_found = False
     if code == 1:
       result = {}
       for p, (code_n, msg_n, val) in params.items():
         if p == '/use_sim_time':
           self.__use_sim_time = (code_n == 1 and val)
+        elif p == '/robot_icon':
+          robot_icon_found = True
+          self.__current_parameter_robot_icon = val if code_n == 1 else ''
+          self.update_robot_icon()
     else:
-      rospy.logwarn("Error on retrieve parameter from %s: %s", str(masteruri), str(msg))
-
+      rospy.logwarn("Error on retrieve sim parameter value from %s: %s", str(masteruri), str(msg))
+    if not robot_icon_found:
+      self.__current_parameter_robot_icon = ''
+      self.update_robot_icon()
 
   def _get_nm_masteruri(self):
     '''
@@ -2377,44 +2465,36 @@ class MasterViewProxy(QtGui.QWidget):
     self.masterTab.nodeTreeView.selectionModel().clearSelection()
     self.masterTab.nodeTreeView.collapseAll()
     
-  def on_copy_node_clicked(self):
+  def on_copy_x_pressed(self):
     result = ''
-    selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-    for node in selectedNodes:
-      try:
-        result = ' '.join([result, node.name])
-      except Exception:
-        pass
-    QtGui.QApplication.clipboard().setText(result.strip())
-
-  def on_copy_topic_clicked(self):
-    result = ''
-    selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
-    for topic in selectedTopics:
-      try:
-        result = ' '.join([result, topic.name, topic.type])
-      except Exception:
-        pass
-    QtGui.QApplication.clipboard().setText(result.strip())
-
-  def on_copy_service_clicked(self):
-    result = ''
-    selectedServices = self.servicesFromIndexes(self.masterTab.servicesView.selectionModel().selectedIndexes())
-    for service in selectedServices:
-      try:
-        result = ' '.join([result, service.name, service.type])
-      except Exception:
-        pass
-    QtGui.QApplication.clipboard().setText(result.strip())
-
-  def on_copy_parameter_clicked(self):
-    result = ''
-    selectedParameter = self.parameterFromIndexes(self.masterTab.parameterView.selectionModel().selectedIndexes())
-    for (key, value) in selectedParameter:
-      try:
-        result = ' '.join([result, key, str(value)])
-      except Exception:
-        pass
+    if self.masterTab.nodeTreeView.hasFocus():
+      selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+      for node in selectedNodes:
+        try:
+          result = ' '.join([result, str(node.pid)])
+        except Exception:
+          pass
+    elif self.masterTab.topicsView.hasFocus():
+      selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
+      for topic in selectedTopics:
+        try:
+          result = ' '.join([result, topic.type])
+        except Exception:
+          pass
+    elif self.masterTab.servicesView.hasFocus():
+      selectedServices = self.servicesFromIndexes(self.masterTab.servicesView.selectionModel().selectedIndexes())
+      for service in selectedServices:
+        try:
+          result = ' '.join([result, service.type])
+        except Exception:
+          pass
+    elif self.masterTab.parameterView.hasFocus():
+      selectedParameter = self.parameterFromIndexes(self.masterTab.parameterView.selectionModel().selectedIndexes())
+      for (key, value) in selectedParameter:
+        try:
+          result = ' '.join([result, str(value)])
+        except Exception:
+          pass
     QtGui.QApplication.clipboard().setText(result.strip())
 
 
