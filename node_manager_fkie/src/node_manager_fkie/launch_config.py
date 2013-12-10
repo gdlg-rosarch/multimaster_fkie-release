@@ -202,7 +202,9 @@ class LaunchConfig(QtCore.QObject):
     '''
     result = set([file])
     regexp_list = [QtCore.QRegExp("\\binclude\\b"), QtCore.QRegExp("\\btextfile\\b"),
-                   QtCore.QRegExp("\\bfile\\b")]
+                   QtCore.QRegExp("\\bfile\\b"), QtCore.QRegExp("\\bvalue=.*pkg:\/\/\\b"),
+                   QtCore.QRegExp("\\bvalue=.*package:\/\/\\b"),
+                   QtCore.QRegExp("\\bvalue=.*\$\(find\\b")]
     lines = []
     with open(file, 'r') as f:
       lines = f.readlines()
@@ -214,11 +216,14 @@ class LaunchConfig(QtCore.QObject):
           endIndex = line.find('"', startIndex+1)
           fileName = line[startIndex+1:endIndex]
           if len(fileName) > 0:
-            path = cls.interpretPath(fileName, os.path.dirname(file))
-            if os.path.isfile(path):
-              result.add(path)
-              if path.endswith('.launch'):
-                result.update(cls.getIncludedFiles(path))
+            try:
+              path = cls.interpretPath(fileName, os.path.dirname(file))
+              if os.path.isfile(path):
+                result.add(path)
+                if path.endswith('.launch'):
+                  result.update(cls.getIncludedFiles(path))
+            except:
+              pass
     return list(result)
 
   def load(self, argv):
@@ -384,7 +389,7 @@ class LaunchConfig(QtCore.QObject):
         if cap_ns == node_fullname:
           cap_ns = item.namespace.rstrip(roslib.names.SEP)
         # if the 'capability_group' parameter found, assign node to the group
-        if self.Roscfg.params.has_key(cap_param):
+        if self.Roscfg.params.has_key(cap_param) and self.Roscfg.params[cap_param].value:
           p = self.Roscfg.params[cap_param]
           if not result.has_key(machine_name):
             result[machine_name] = dict()
@@ -429,3 +434,12 @@ class LaunchConfig(QtCore.QObject):
         return item
     return None
 
+  def get_robot_icon(self):
+    '''
+    Returns the value of the `/robot_icon` parameter or None 
+    '''
+    try:
+      return self.Roscfg.params['/robot_icon'].value
+    except:
+      pass
+    return None
