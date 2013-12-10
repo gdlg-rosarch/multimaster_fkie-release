@@ -37,7 +37,10 @@ from python_qt_binding import QtCore
 import roslib
 import rospy
 from xml_highlighter import XmlHighlighter
+from yaml_highlighter import YamlHighlighter
+from detailed_msg_box import WarningMessageBox
 
+from master_discovery_fkie.common import resolve_url
 from common import package_name
 
 class Editor(QtGui.QTextEdit):
@@ -65,11 +68,15 @@ class Editor(QtGui.QTextEdit):
     self.setFontFamily("courier new")
     self.setProperty("backgroundVisible", True)
     self.regexp_list = [QtCore.QRegExp("\\binclude\\b"), QtCore.QRegExp("\\btextfile\\b"),
-                        QtCore.QRegExp("\\bfile\\b")]
+                        QtCore.QRegExp("\\bfile\\b"), QtCore.QRegExp("\\bvalue=.*pkg:\/\/\\b"),
+                        QtCore.QRegExp("\\bvalue=.*package:\/\/\\b"),
+                        QtCore.QRegExp("\\bvalue=.*\$\(find\\b")]
     self.filename = filename
+    self.file_info = None
     if self.filename:
       file = QtCore.QFile(filename);
       if file.open(QtCore.QIODevice.ReadOnly | QtCore.QIODevice.Text):
+        self.file_info = QtCore.QFileInfo(filename)
         self.setText(unicode(file.readAll(), "utf-8"))
 
     self.path = '.'
@@ -81,11 +88,12 @@ class Editor(QtGui.QTextEdit):
     '''
     Saves changes to the file.
     '''
-    if self.document().isModified():
+    if self.document().isModified() or not QtCore.QFileInfo(self.filename).exists():
       file = QtCore.QFile(self.filename)
       if file.open(QtCore.QIODevice.WriteOnly | QtCore.QIODevice.Text):
         file.write(self.toPlainText().encode('utf-8'))
         self.document().setModified(False)
+        self.file_info = QtCore.QFileInfo(self.filename)
         return True
       else:
         QtGui.QMessageBox.critical(self, "Error", "Cannot write XML file")
@@ -122,10 +130,16 @@ class Editor(QtGui.QTextEdit):
         if len(script) == 2 and (script[0] == 'find'):
           pkg = roslib.packages.get_pkg_dir(script[1])
           return os.path.normpath(''.join([pkg, '/', path[endIndex+1:]]))
-    elif len(path) > 0 and path[0] != '/':
-      return os.path.normpath(''.join([self.path, '/', path]))
+    else:
+      try:
+        return resolve_url(path)
+      except ValueError, e:
+        if len(path) > 0 and path[0] != '/':
+          return os.path.normpath(''.join([self.path, '/', path]))
+#    elif len(path) > 0 and path[0] != '/':
+#      return os.path.normpath(''.join([self.path, '/', path]))
     return os.path.normpath(path)
-    
+
   def index(self, text):
     '''
     Searches in the given text for key indicates the including of a file and 
@@ -139,6 +153,11 @@ class Editor(QtGui.QTextEdit):
       index = pattern.indexIn(text)
       if index > -1:
         return index
+    try:
+      print path
+      return resolve_url(path)
+    except:
+      pass
     return -1
 
   def includedFiles(self):
@@ -156,10 +175,19 @@ class Editor(QtGui.QTextEdit):
           endIndex = text.find('"', startIndex+1)
           fileName = text[startIndex+1:endIndex]
           if len(fileName) > 0:
-            path = self.interpretPath(fileName)
-            file = QtCore.QFile(path)
-            if file.exists():
-              result.append(path)
+            try:
+              path = self.interpretPath(fileName)
+              file = QtCore.QFile(path)
+              if file.exists() and (path.endswith('.launch') or
+                                    path.endswith('.yaml') or
+                                    path.endswith('.conf') or
+                                    path.endswith('.cfg') or
+                                    path.endswith('.iface') or
+                                    path.endswith('.sync')):
+                result.append(path)
+            except:
+              import traceback
+              print traceback.format_exc()
       b = b.next()
     return result
 
@@ -182,6 +210,25 @@ class Editor(QtGui.QTextEdit):
       result[len(result):] = editor.fileWithText(search_text)
     return result
 
+  def focusInEvent(self, event):
+    # check for file changes
+    try:
+      if self.filename and self.file_info:
+        if self.file_info.lastModified() != QtCore.QFileInfo(self.filename).lastModified():
+          self.file_info = QtCore.QFileInfo(self.filename)
+          result = QtGui.QMessageBox.question(self, "File changed", "File was changed, reload?", QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)
+          if result == QtGui.QMessageBox.Yes:
+            file = QtCore.QFile(self.filename);
+            if file.open(QtCore.QIODevice.ReadOnly | QtCore.QIODevice.Text):
+              self.setText(unicode(file.readAll(), "utf-8"))
+              self.document().setModified(False)
+              self.textChanged.emit()
+            else:
+              QtGui.QMessageBox.critical(self, "Error", "Cannot open launch file%s"%self.filename)
+    except:
+      pass
+    QtGui.QTextEdit.focusInEvent(self, event)
+
   def mouseReleaseEvent(self, event):
     '''
     Opens the new editor, if the user clicked on the included file and sets the 
@@ -196,22 +243,25 @@ class Editor(QtGui.QTextEdit):
           endIndex = cursor.block().text().find('"', startIndex+1)
           fileName = cursor.block().text()[startIndex+1:endIndex]
           if len(fileName) > 0:
-            file = QtCore.QFile(self.interpretPath(fileName))
-            if not file.exists():
-              # create a new file, if it does not exists
-              result = QtGui.QMessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", file.fileName()]), QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)
-              if result == QtGui.QMessageBox.Yes:
-                dir = os.path.dirname(file.fileName())
-                if not os.path.exists(dir):
-                  os.makedirs(dir)
-                with open(file.fileName(),'w') as f:
-                  if file.fileName().endswith('.launch'):
-                    f.write('<launch>\n\n</launch>')
+            try:
+              file = QtCore.QFile(self.interpretPath(fileName))
+              if not file.exists():
+                # create a new file, if it does not exists
+                result = QtGui.QMessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", file.fileName()]), QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)
+                if result == QtGui.QMessageBox.Yes:
+                  dir = os.path.dirname(file.fileName())
+                  if not os.path.exists(dir):
+                    os.makedirs(dir)
+                  with open(file.fileName(),'w') as f:
+                    if file.fileName().endswith('.launch'):
+                      f.write('<launch>\n\n</launch>')
+                  self.load_request_signal.emit(file.fileName())
+              else:
                 self.load_request_signal.emit(file.fileName())
-            else:
-              self.load_request_signal.emit(file.fileName())
+            except Exception, e:
+              WarningMessageBox(QtGui.QMessageBox.Warning, "File not found", fileName, str(e)).exec_()
     QtGui.QTextEdit.mouseReleaseEvent(self, event)
-  
+
   def mouseMoveEvent(self, event):
     '''
     Sets the X{QtCore.Qt.PointingHandCursor} if the control key is pressed and 
@@ -227,7 +277,7 @@ class Editor(QtGui.QTextEdit):
     else:
       self.viewport().setCursor(QtCore.Qt.IBeamCursor)
     QtGui.QTextEdit.mouseMoveEvent(self, event)
-  
+
   def keyPressEvent(self, event):
     '''
     Enable the mouse tracking by X{setMouseTracking()} if the control key is pressed.
@@ -354,7 +404,7 @@ class FindDialog(QtGui.QDialog):
     self.found_files.setVisible(False)
     self.found_files.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
     self.verticalLayout.addWidget(self.found_files)
-    
+
     self.buttonBox = QtGui.QDialogButtonBox(self)
     self.find_button = QtGui.QPushButton(self.tr("&Find"))
     self.find_button.setDefault(True)
@@ -369,7 +419,7 @@ class FindDialog(QtGui.QDialog):
 #    QtCore.QObject.connect(self.buttonBox, QtCore.SIGNAL("accepted()"), self.accept)
     QtCore.QObject.connect(self.buttonBox, QtCore.SIGNAL("rejected()"), self.reject)
     QtCore.QMetaObject.connectSlotsByName(self)
-    
+
     self.search_text = ''
     self.search_pos = QtGui.QTextCursor()
 
@@ -381,13 +431,12 @@ class XmlEditor(QtGui.QDialog):
   '''
   Creates a dialog to edit a launch file.
   '''
-  
   finished_signal = QtCore.Signal(list)
   '''
   finished_signal has as parameter the filenames of the initialization and is emitted, if this
   dialog was closed.
   '''
-  
+
   def __init__(self, filenames, search_text='', parent=None):
     '''
     @param filenames: a list with filenames. The last one will be activated.
@@ -405,10 +454,10 @@ class XmlEditor(QtGui.QDialog):
     self.setWindowTitle("ROSLaunch Editor");
 #    self.finished.connect(self.closeEvent)
     self.init_filenames = list(filenames)
-    
+
     self.files = []
     '''@ivar: list with all open files '''
-    
+
     # create tabs for files
     self.verticalLayout = QtGui.QVBoxLayout(self)
     self.verticalLayout.setContentsMargins(0, 0, 0, 0)
@@ -421,7 +470,7 @@ class XmlEditor(QtGui.QDialog):
     self.tabWidget.setObjectName("tabWidget")
     self.tabWidget.tabCloseRequested.connect(self.on_close_tab)
     self.verticalLayout.addWidget(self.tabWidget)
-    
+
     # create the buttons line
     self.buttons = QtGui.QWidget(self)
     self.horizontalLayout = QtGui.QHBoxLayout(self.buttons)
@@ -500,8 +549,10 @@ class XmlEditor(QtGui.QDialog):
         self.files.append(filename)
         editor.setCurrentPath(os.path.basename(filename))
         editor.load_request_signal.connect(self.on_load_request)
-
-        hl = XmlHighlighter(editor.document())
+        if filename.endswith('.launch'):
+          hl = XmlHighlighter(editor.document())
+        else:
+          hl = YamlHighlighter(editor.document())
         editor.textChanged.connect(self.on_editor_textChanged)
         editor.cursorPositionChanged.connect(self.on_editor_positionChanged)
         editor.setFocus(QtCore.Qt.OtherFocusReason)
@@ -514,7 +565,6 @@ class XmlEditor(QtGui.QDialog):
     except:
       import traceback
       rospy.logwarn("Error while open %s: %s", filename, traceback.format_exc())
-    
     self.tabWidget.setUpdatesEnabled(True)
     if search_text:
       if self.find(search_text, False):
@@ -592,13 +642,13 @@ class XmlEditor(QtGui.QDialog):
     '''
     if self.tabWidget.currentWidget().save():
       self.on_editor_textChanged()
-  
+
   def on_editor_textChanged(self):
     '''
     If the content was changed, a '*' will be shown in the tab name.
     '''
     tab_name = self.__getTabName(self.tabWidget.currentWidget().filename)
-    if (self.tabWidget.currentWidget().document().isModified()):
+    if (self.tabWidget.currentWidget().document().isModified()) or not QtCore.QFileInfo(self.tabWidget.currentWidget().filename).exists():
       tab_name = ''.join(['*', tab_name])
     self.tabWidget.setTabText(self.tabWidget.currentIndex(), tab_name)
 
@@ -608,7 +658,7 @@ class XmlEditor(QtGui.QDialog):
     '''
     cursor = self.tabWidget.currentWidget().textCursor()
     self.pos_label.setText(''.join([str(cursor.blockNumber()+1), ':', str(cursor.columnNumber()+1)]))
-  
+
   def on_shortcut_find(self):
     '''
     Opens a find dialog.
@@ -621,9 +671,16 @@ class XmlEditor(QtGui.QDialog):
     '''
     Opens a C{goto} dialog.
     '''
-    value, ok = QtGui.QInputDialog.getInt(self, "Goto",
-                                      self.tr("Line number:"), QtGui.QLineEdit.Normal,
-                                      minValue=1, step=1)
+    value = 1
+    ok = False
+    try:
+      value, ok = QtGui.QInputDialog.getInt(self, "Goto",
+                                        self.tr("Line number:"), QtGui.QLineEdit.Normal,
+                                        minValue=1, step=1)
+    except:
+      value, ok = QtGui.QInputDialog.getInt(self, "Goto",
+                                  self.tr("Line number:"), QtGui.QLineEdit.Normal,
+                                  min=1, step=1)
     if ok:
       if value > self.tabWidget.currentWidget().document().blockCount():
         value = self.tabWidget.currentWidget().document().blockCount()
@@ -632,6 +689,7 @@ class XmlEditor(QtGui.QDialog):
         mov = QtGui.QTextCursor.NextBlock if curpos < value else QtGui.QTextCursor.PreviousBlock
         self.tabWidget.currentWidget().moveCursor(mov)
         curpos = self.tabWidget.currentWidget().textCursor().blockNumber()+1
+    self.tabWidget.currentWidget().setFocus(QtCore.Qt.ActiveWindowFocusReason)
 
   def __getTabName(self, file):
     base = os.path.basename(file).replace('.launch', '')
@@ -678,7 +736,7 @@ class XmlEditor(QtGui.QDialog):
         self.find_dialog.found_files.clear()
         self.find_dialog.found_files.addItems(items)
         self.find_dialog.found_files.setVisible(True)
-        self.find_dialog.resize(self.find_dialog.found_files.contentsSize())
+#        self.find_dialog.resize(self.find_dialog.found_files.contentsSize())
         found = True
       else:
         tmp_pos = self.find_dialog.search_pos
