@@ -52,6 +52,8 @@ class SyncHighlighter(QtGui.QSyntaxHighlighter):
     self.commentStart = QtCore.QRegExp("#")
     self.commentEnd = QtCore.QRegExp("\n")
     self.commentFormat = QtGui.QTextCharFormat()
+    self.commentFormat.setFontItalic(True)
+    self.commentFormat.setForeground(QtCore.Qt.darkGray)
     f = QtGui.QTextCharFormat()
     r = QtCore.QRegExp()
     r.setMinimal(True)
@@ -79,9 +81,6 @@ class SyncHighlighter(QtGui.QSyntaxHighlighter):
 #    for attr in attrList:
 #      r.setPattern(attr)
 #      self.rules.append((QtCore.QRegExp(r), QtGui.QTextCharFormat(f)))
-
-    self.commentFormat.setFontItalic(True)
-    self.commentFormat.setForeground(QtCore.Qt.darkGray)
 
 
   def highlightBlock(self, text):
@@ -293,7 +292,7 @@ class SyncDialog(QtGui.QDialog):
         tmp_file = os.path.join(nm.screen().LOG_PATH, 'tmp_sync_interface.sync')
         with open(tmp_file, 'w+') as f: 
           iface = f.write(self.textedit.toPlainText())
-        from master_sync_fkie.common import read_interface
+        from master_discovery_fkie.common import read_interface
         read_interface(tmp_file)
         if not self._new_iface and self._interfaces_files.has_key(self.interface_field.currentText()):
           fileName = self._interfaces_files[self.interface_field.currentText()]
