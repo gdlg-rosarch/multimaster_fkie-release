@@ -7,7 +7,7 @@ A GUI to manage the configuration on local and remote ROS masters. For more deta
 .. _roswiki: http://www.ros.org/wiki/node_manager_fkie
 
 
-Shortcats
+Shortcuts
 ---------
 
 ===================== ========
@@ -28,6 +28,7 @@ Shortcats
 **Alt+E**             Expands all groups in Nodes tab.
 **Alt+C**             Collapses all groups in Nodes tab.
 **Alt+{1..5}**        Selects all nodes of the *{first...fifth}* host in Nodes tab excepting the manage nodes.
+**Ctrl+X**            Copies the alternative values to clipboard. On `Node` view this is PID. On `Topic` and `Service` view it is the type. On `Parameter` view it is the parameter value.
 ===================== ========
 
 TODO
