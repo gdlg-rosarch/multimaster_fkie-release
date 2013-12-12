@@ -1,0 +1,43 @@
+ros-groovy-multimaster-msgs-fkie (0.3.9-0oneiric) oneiric; urgency=high
+
+  * multimaster_fkie: moved .gitignore to top level
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 11 Dec 2013 23:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.8-0oneiric) oneiric; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Mon, 09 Dec 2013 23:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.7-0oneiric) oneiric; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 16 Oct 2013 22:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.6-0oneiric) oneiric; urgency=high
+
+  * multimaster_fkie: added SyncServiceInfo message to detect changes on services
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Mon, 16 Sep 2013 22:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.5-0oneiric) oneiric; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Thu, 05 Sep 2013 22:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.4-0oneiric) oneiric; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 04 Sep 2013 22:00:00 -0000
+
+ros-groovy-multimaster-msgs-fkie (0.3.3-0oneiric) oneiric; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Tue, 03 Sep 2013 22:00:00 -0000
+
+
