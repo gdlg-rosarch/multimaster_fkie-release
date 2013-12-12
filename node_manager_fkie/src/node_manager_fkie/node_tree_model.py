@@ -364,7 +364,7 @@ class GroupItem(QtGui.QStandardItem):
         # set the running state of the node to None
         if not fixed_node_names is None and not item.name in fixed_node_names:
           item.node_info = NodeInfo(item.name, item.node_info.masteruri)
-        if not (item.has_configs() or item.is_running()):
+        if not (item.has_configs() or item.is_running() or item.published or item.subscribed or item.services):
           removed = True
           self.removeRow(i)
         elif not isinstance(self, HostItem):
@@ -846,6 +846,10 @@ class NodeItem(QtGui.QStandardItem):
     '''
     abbos_changed = False
     run_changed = False
+#     print "!!!", self.name
+#     print "  subs: ", self._node_info.subscribedTopics, node_info.subscribedTopics
+#     print "  pubs: ", self._node_info.publishedTopics, node_info.publishedTopics
+#     print "  srvs: ", self._node_info.services, node_info.services
     if self._node_info.publishedTopics != node_info.publishedTopics:
       abbos_changed = True
       self._node_info._publishedTopics = list(node_info.publishedTopics)
@@ -862,7 +866,7 @@ class NodeItem(QtGui.QStandardItem):
       self._node_info.uri = node_info.uri
       run_changed = True
     # update the tooltip and icon
-    if run_changed and (self.is_running() or self.has_configs):
+    if run_changed and (self.is_running() or self.has_configs) or abbos_changed:
       self.updateDispayedName()
 #      self.updateDisplayedURI()
       if not self.parent_item is None and not isinstance(self.parent_item, HostItem):
@@ -958,6 +962,12 @@ class NodeItem(QtGui.QStandardItem):
 #      tooltip = ''.join([tooltip, '<dl><dt>(Remote nodes will not be ping, so they are always marked running)</dt></dl>'])
 #      tooltip = ''.join([tooltip, '</dl>'])
 #      self.setToolTip(''.join(['<div>', tooltip, '</div>']))
+    elif self.node_info.pid is None and self.node_info.uri is None and (self.node_info.subscribedTopics or self.node_info.publishedTopics or self.node_info.services):
+      self.setIcon(QtGui.QIcon(':/icons/crystal_clear_warning.png'))
+      self._state = NodeItem.STATE_WARNING
+      tooltip = ''.join([tooltip, '<dl><dt>Can\'t get node contact information, but there exists publisher, subscriber or services of this node.</dt></dl>'])
+      tooltip = ''.join([tooltip, '</dl>'])
+      self.setToolTip(''.join(['<div>', tooltip, '</div>']))
     elif not self.node_info.uri is None:
       self._state = NodeItem.STATE_WARNING
       self.setIcon(QtGui.QIcon(':/icons/crystal_clear_warning.png'))
