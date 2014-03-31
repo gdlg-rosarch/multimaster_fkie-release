@@ -447,6 +447,7 @@ class GroupItem(QtGui.QStandardItem):
       elif isinstance(item, NodeItem):
         if is_sync_running:
           item.is_ghost = (item.node_info.uri is None and (item.name in running_nodes and running_nodes[item.name] == item.node_info.masteruri))
+          item.has_running = (item.node_info.uri is None and not item.name in ignore and (item.name in running_nodes and running_nodes[item.name] != item.node_info.masteruri))
         else:
           if item.is_ghost:
             item.is_ghost = False
@@ -490,10 +491,10 @@ class GroupItem(QtGui.QStandardItem):
     if items:
       result = ''.join([result, '<b><u>', title,'</u></b>'])
       if len(items) > 1:
-        result = ''.join([result, ' [', str(len(items)),']'])
-      result = ''.join([result, '<ul>'])
+        result = ''.join([result, ' <span style="color:gray;">[', str(len(items)),']</span>'])
+      result = ''.join([result, '<ul><span></span><br>'])
       for i in items:
-        result = ''.join([result, '<li>', i, '</li>'])
+        result = ''.join([result, '\n', i, '<br>'])
       result = ''.join([result, '</ul>'])
     return result
 
@@ -715,6 +716,8 @@ class HostItem(GroupItem):
     tooltip = ''.join([tooltip, '<a href="open_sync_dialog://', str(self.id[0]).replace('http://', ''),'">', 'open sync dialog</a>'])
     tooltip = ''.join([tooltip, '<p>'])
     tooltip = ''.join([tooltip, '<a href="show_all_screens://', str(self.id[0]).replace('http://', ''),'">', 'show all screens</a>'])
+    tooltip = ''.join([tooltip, '<p>'])
+    tooltip = ''.join([tooltip, '<a href="remove_all_launch_server://', str(self.id[0]).replace('http://', ''),'">', 'kill all launch server</a>'])
     tooltip = ''.join([tooltip, '<p>'])
     # get sensors
     capabilities = []

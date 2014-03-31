@@ -34,8 +34,8 @@
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.3.9"
-__date__ = "2013-12-12"
+__version__ = "0.3.10.0"
+__date__ = "2014-03-31"
 
 import os
 import sys
@@ -60,6 +60,7 @@ from name_resolution import NameResolution
 from history import History
 from file_watcher import FileWatcher
 from common import get_ros_home, masteruri_from_ros
+from master_view_proxy import LaunchArgsSelectionRequest
 
 # set the cwd to the package of the node_manager_fkie to support the images
 # in HTML descriptions of the robots and capabilities
@@ -83,6 +84,8 @@ the cache directory to store the results of tests for local hosts.
 '''
 
 HELP_FILE = ''.join([PACKAGE_DIR, os.path.sep, 'README.rst'])
+
+CURRENT_DIALOG_PATH = os.path.expanduser('~')
 
 _lock = threading.RLock()
 
@@ -108,6 +111,7 @@ _start_handler = None
 _name_resolution = None
 _history = None
 _file_watcher = None
+_file_watcher_param = None
 app = None
 
 def ssh():
@@ -155,11 +159,19 @@ def history():
 
 def file_watcher():
   '''
-  @return: The history of entered parameter.
-  @rtype: L{History}
+  @return: The file watcher object with all loaded configuration files.
+  @rtype: L{FileWatcher}
   '''
   global _file_watcher
   return _file_watcher
+
+def file_watcher_param():
+  '''
+  @return: The file watcher object with all configuration files referenced by parameter value.
+  @rtype: L{FileWatcher}
+  '''
+  global _file_watcher_param
+  return _file_watcher_param
 
 
 def is_local(hostname):
@@ -276,12 +288,14 @@ def init_globals(masteruri):
   global _name_resolution
   global _history
   global _file_watcher
+  global _file_watcher_param
   _ssh_handler = SSHhandler()
   _screen_handler = ScreenHandler()
   _start_handler = StartHandler()
   _name_resolution = NameResolution()
   _history = History()
   _file_watcher = FileWatcher()
+  _file_watcher_param = FileWatcher()
 
   # test where the roscore is running (local or remote)
   __is_local('localhost') ## fill cache

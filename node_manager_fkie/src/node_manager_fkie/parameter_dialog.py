@@ -58,11 +58,12 @@ class MyComboBox(QtGui.QComboBox):
     key_mod = QtGui.QApplication.keyboardModifiers()
     if key_mod & QtCore.Qt.ShiftModifier and (event.key() == QtCore.Qt.Key_Delete):
       try:
-        if self.currentText():
+        curr_text = self.currentText()
+        if curr_text:
           for i in range(self.count()):
-            if self.currentText() == self.itemText(i):
+            if curr_text == self.itemText(i):
               self.removeItem(i)
-              self.remove_item_signal.emit(self.currentText())
+              self.remove_item_signal.emit(curr_text)
               self.clearEditText()
       except:
         import traceback
@@ -623,7 +624,7 @@ class ParameterDialog(QtGui.QDialog):
   This dialog creates an input mask for the given parameter and their types.
   '''
 
-  def __init__(self, params=dict(), buttons=QtGui.QDialogButtonBox.Cancel|QtGui.QDialogButtonBox.Ok, parent=None):
+  def __init__(self, params=dict(), buttons=QtGui.QDialogButtonBox.Cancel|QtGui.QDialogButtonBox.Ok, sidebar_var='', parent=None):
     '''
     Creates an input dialog.
     @param params: a dictionary with parameter names and (type, values). 
@@ -634,9 +635,11 @@ class ParameterDialog(QtGui.QDialog):
     QtGui.QDialog.__init__(self, parent=parent)
     self.setObjectName(' - '.join(['ParameterDialog', str(params)]))
 
-    self.__current_path = os.path.expanduser('~')
-
-    self.verticalLayout = QtGui.QVBoxLayout(self)
+    self.__current_path = nm.CURRENT_DIALOG_PATH
+    self.horizontalLayout = QtGui.QHBoxLayout(self)
+    self.horizontalLayout.setObjectName("horizontalLayout")
+    self.horizontalLayout.setContentsMargins(1, 1, 1, 1)
+    self.verticalLayout = QtGui.QVBoxLayout()
     self.verticalLayout.setObjectName("verticalLayout")
     self.verticalLayout.setContentsMargins(1, 1, 1, 1)
     # add filter row
@@ -688,7 +691,22 @@ class ParameterDialog(QtGui.QDialog):
     self.buttonBox.accepted.connect(self.accept)
     self.buttonBox.rejected.connect(self.reject)
     self.verticalLayout.addWidget(self.buttonBox)
+    self.horizontalLayout.addLayout(self.verticalLayout)
 
+    # add side bar for checklist
+    values = nm.history().cachedParamValues('/%s'%sidebar_var)
+    self.sidebar_frame = QtGui.QFrame()
+    self.sidebar_frame.setObjectName(sidebar_var)
+    sidebarframe_verticalLayout = QtGui.QVBoxLayout(self.sidebar_frame)
+    sidebarframe_verticalLayout.setObjectName("sidebarframe_verticalLayout")
+    sidebarframe_verticalLayout.setContentsMargins(1, 1, 1, 1)
+    if len(values) > 1 and sidebar_var in params:
+      self.horizontalLayout.addWidget(self.sidebar_frame)
+      values.sort()
+      for v in values:
+        checkbox = QtGui.QCheckBox(v)
+        self.sidebar_frame.layout().addWidget(checkbox)
+      self.sidebar_frame.layout().addItem(QtGui.QSpacerItem(100, 20, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding))
     # set the input fields
     if params:
       self.content.createFieldFromValue(params)
@@ -769,7 +787,20 @@ class ParameterDialog(QtGui.QDialog):
     @returns: a directory with parameter and value for all entered fields.
     @rtype: C{dict(str(param) : str(value))}
     '''
-    return self.content.value()
+    # get the results of sidebar
+    sidebar_list = []
+    sidebar_name = self.sidebar_frame.objectName()
+    for j in range(self.sidebar_frame.layout().count()-1):
+      w = self.sidebar_frame.layout().itemAt(j).widget()
+      if isinstance(w, QtGui.QCheckBox):
+        if w.checkState() == QtCore.Qt.Checked:
+          sidebar_list.append(w.text())
+    result = self.content.value()
+    # add the sidebar results
+    if sidebar_name in result:
+      sidebar_list.append(result[sidebar_name])
+      result[sidebar_name] = list(set(sidebar_list))
+    return result
 
   def _save_parameter(self):
     try:
@@ -780,6 +811,7 @@ class ParameterDialog(QtGui.QDialog):
                                                "YAML files (*.yaml);;All files (*)")
       if fileName:
         self.__current_path = os.path.dirname(fileName)
+        nm.CURRENT_DIALOG_PATH = os.path.dirname(fileName)
         text = yaml.dump(self.content.value(), default_flow_style=False)
         with open(fileName, 'w+') as f:
           f.write(text)
@@ -799,6 +831,7 @@ class ParameterDialog(QtGui.QDialog):
                                                    "YAML files (*.yaml);;All files (*)")
       if fileName:
         self.__current_path = os.path.dirname(fileName)
+        nm.CURRENT_DIALOG_PATH = os.path.dirname(fileName)
         with open(fileName, 'r') as f:
 #          print yaml.load(f.read())
           self.content.set_values(yaml.load(f.read()))
