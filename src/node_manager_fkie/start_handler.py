@@ -34,6 +34,7 @@ import os, shlex, subprocess
 import socket
 import types
 import time
+import signal
 
 import roslib
 import rospy
@@ -97,7 +98,7 @@ class StartHandler(object):
     if prefix.lower() == 'screen' or prefix.lower().find('screen ') != -1:
       rospy.loginfo("SCREEN prefix removed before start!")
       prefix = ''
-    args = [''.join(['__ns:=', n.namespace]), ''.join(['__name:=', n.name])]
+    args = [''.join(['__ns:=', n.namespace.rstrip(rospy.names.SEP)]), ''.join(['__name:=', n.name])]
     if not (n.cwd is None):
       args.append(''.join(['__cwd:=', n.cwd]))
 
@@ -110,7 +111,10 @@ class StartHandler(object):
     env_loader = ''
     if n.machine_name:
       machine = launch_config.Roscfg.machines[n.machine_name]
-      host = machine.address
+      if not machine.address in ['localhost', '127.0.0.1']:
+        host = machine.address
+        if masteruri is None:
+          masteruri = nm.nameres().masteruri(n.machine_name)
       #TODO: env-loader support?
 #      if hasattr(machine, "env_loader") and machine.env_loader:
 #        env_loader = machine.env_loader
@@ -118,8 +122,6 @@ class StartHandler(object):
     if not force2host is None:
       host = force2host
 
-    if masteruri is None:
-      masteruri = nm.nameres().masteruri(n.machine_name)
     # set the ROS_MASTER_URI
     if masteruri is None:
       masteruri = masteruri_from_ros()
@@ -130,13 +132,13 @@ class StartHandler(object):
     # set the global parameter
     if not masteruri is None and not masteruri in launch_config.global_param_done:
       global_node_names = cls.getGlobalParams(launch_config.Roscfg)
-      rospy.loginfo("Register global parameter:\n  %s", '\n  '.join(global_node_names))
+      rospy.loginfo("Register global parameter:\n  %s", '\n  '.join("%s%s"%(str(v)[:80],'...' if len(str(v))>80 else'') for v in global_node_names.values()))
       abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, global_node_names, [], user, pw, auto_pw_request)
       launch_config.global_param_done.append(masteruri)
 
     # add params
     if not masteruri is None:
-      nodens = ''.join([n.namespace, n.name, '/'])
+      nodens = ''.join([n.namespace, n.name, rospy.names.SEP])
       params = dict()
       for param, value in launch_config.Roscfg.params.items():
         if param.startswith(nodens):
@@ -146,7 +148,7 @@ class StartHandler(object):
         if cparam.startswith(nodens):
           clear_params.append(cparam)
       rospy.loginfo("Delete parameter:\n  %s", '\n  '.join(clear_params))
-      rospy.loginfo("Register parameter:\n  %s", '\n  '.join(params))
+      rospy.loginfo("Register parameter:\n  %s", '\n  '.join("%s%s"%(str(v)[:80],'...' if len(str(v))>80 else'') for v in params.values()))
       abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(masteruri, params, clear_params, user, pw, auto_pw_request)
     #'print "RUN prepared", node, time.time()
 
@@ -326,8 +328,10 @@ class StartHandler(object):
           if not found and package:
             not_found_packages.append(package)
         if p.value is None:
-          raise StartException("The parameter '%s' is invalid!"%(p.value))
-        param_server_multi.setParam(rospy.get_name(), p.key, value if is_abs_path else p.value)
+          rospy.logwarn("The parameter '%s' is invalid: '%s'"%(p.key, p.value))
+          #raise StartException("The parameter '%s' is invalid: '%s'"%(p.key, p.value))
+        else:
+          param_server_multi.setParam(rospy.get_name(), p.key, value if is_abs_path else p.value)
       r  = param_server_multi()
       for code, msg, _ in r:
         if code != 1:
@@ -719,7 +723,7 @@ class StartHandler(object):
         output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--delete_logs', nodename], user, pw, auto_pw_request)
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
-  
+
   def kill(self, host, pid, auto_pw_request=False, user=None, pw=None):
     '''
     Kills the process with given process id on given host.
@@ -739,7 +743,6 @@ class StartHandler(object):
   def _kill_wo(self, host, pid, auto_pw_request=False, user=None, pw=None):
     rospy.loginfo("kill %s on %s", str(pid), host)
     if nm.is_local(host): 
-      import signal
       os.kill(pid, signal.SIGKILL)
       rospy.loginfo("kill: %s", str(pid))
     else:
