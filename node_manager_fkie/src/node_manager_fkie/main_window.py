@@ -32,6 +32,7 @@
 
 import os
 import time
+import uuid
 import xmlrpclib
 import threading
 import getpass
@@ -89,6 +90,8 @@ class MainWindow(QtGui.QMainWindow):
     self.__current_icon = None
     self.__current_master_label_name = None
     self.__current_path = os.path.expanduser('~')
+    self._changed_files = dict()
+    self._changed_files_param = dict()
     #self.setAttribute(QtCore.Qt.WA_AlwaysShowToolTips, True)
     #load the UI formular for the main window
 #    loader = QtUiTools.QUiLoader()
@@ -156,6 +159,8 @@ class MainWindow(QtGui.QMainWindow):
     self.ui.xmlFileView.setModel(LaunchListModel())
     self.ui.xmlFileView.setAlternatingRowColors(True)
     self.ui.xmlFileView.activated.connect(self.on_launch_selection_activated)
+    self.ui.xmlFileView.setDragDropMode(QtGui.QAbstractItemView.DragOnly)
+    self.ui.xmlFileView.setDragEnabled(True)
     sm = self.ui.xmlFileView.selectionModel()
     sm.selectionChanged.connect(self.on_xmlFileView_selection_changed)
     self.ui.refreshXmlButton.clicked.connect(self.on_refresh_xml_clicked)
@@ -171,27 +176,8 @@ class MainWindow(QtGui.QMainWindow):
     self.masters = dict() # masteruri : MasterViewProxy
     self.currentMaster = None # MasterViewProxy
 
-    # initialize the class to get the state of discovering of other ROS master
-    self._update_handler = UpdateHandler()
-    self._update_handler.master_info_signal.connect(self.on_master_info_retrieved)
-    self._update_handler.error_signal.connect(self.on_master_info_error)
-
-    # this monitor class is used, if no master_discovery node is running to get the state of the local ROS master
-    self.own_master_monitor = OwnMasterMonitoring()
-    self.own_master_monitor.init(22622)
-    self.own_master_monitor.state_signal.connect(self.on_master_state_changed)
-    self.own_master_monitor.err_signal.connect(self.on_master_monitor_err)
-
-    # get the name of the service and topic of the discovery node. The name are determine by the message type  of those topics
-    self.masterlist_service = masterlist_service = MasterListService()
-    masterlist_service.masterlist_signal.connect(self.on_master_list_retrieved)
-    masterlist_service.masterlist_err_signal.connect(self.on_master_list_err_retrieved)
-    self.state_topic = MasterStateTopic()
-    self.state_topic.state_signal.connect(self.on_master_state_changed)
-    self.stats_topic = MasterStatisticTopic()
-    self.stats_topic.stats_signal.connect(self.on_conn_stats_updated)
-
     nm.file_watcher().file_changed.connect(self.on_configfile_changed)
+    nm.file_watcher_param().file_changed.connect(self.on_configparamfile_changed)
     self.__in_question = set()
 
     ############################################################################
@@ -245,6 +231,7 @@ class MainWindow(QtGui.QMainWindow):
     '''@ivar: stores the open XmlEditor '''
 
     self.ui.simTimeLabel.setVisible(False)
+    self.ui.launchServerLabel.setVisible(False)
     self.ui.hideDocksButton.clicked.connect(self.on_hide_docks_toggled)
 
     # since the is_local method is threaded for host names, call it to cache the localhost
@@ -275,10 +262,35 @@ class MainWindow(QtGui.QMainWindow):
                         "No SCREEN available! You can't launch nodes.",
                         str(e)).exec_()
 
+    self.ui.imageLabel.mouseDoubleClickEvent = self.image_mouseDoubleClickEvent
+
+    # =============================
+    # Initialize the update handler
+    # =============================
+
+    # initialize the class to get the state of discovering of other ROS master
+    self._update_handler = UpdateHandler()
+    self._update_handler.master_info_signal.connect(self.on_master_info_retrieved)
+    self._update_handler.error_signal.connect(self.on_master_info_error)
+
+    # this monitor class is used, if no master_discovery node is running to get the state of the local ROS master
+    self.own_master_monitor = OwnMasterMonitoring()
+    self.own_master_monitor.init(22622)
+    self.own_master_monitor.state_signal.connect(self.on_master_state_changed)
+    self.own_master_monitor.err_signal.connect(self.on_master_monitor_err)
+
+    # get the name of the service and topic of the discovery node. The name are determine by the message type  of those topics
+    self.masterlist_service = masterlist_service = MasterListService()
+    masterlist_service.masterlist_signal.connect(self.on_master_list_retrieved)
+    masterlist_service.masterlist_err_signal.connect(self.on_master_list_err_retrieved)
+    self.state_topic = MasterStateTopic()
+    self.state_topic.state_signal.connect(self.on_master_state_changed)
+    self.stats_topic = MasterStatisticTopic()
+    self.stats_topic.stats_signal.connect(self.on_conn_stats_updated)
+
     self._con_tries = dict()
     self._subscribe()
 
-    self.ui.imageLabel.mouseDoubleClickEvent = self.image_mouseDoubleClickEvent
 
   def on_hide_docks_toggled(self, checked):
     if self.ui.dockWidgetArea(self.ui.launchDock) == QtCore.Qt.LeftDockWidgetArea:
@@ -421,7 +433,7 @@ class MainWindow(QtGui.QMainWindow):
               node_name = ''.join([str(nm.nameres().mastername(masteruri)), roslib.names.SEP, 
                                     os.path.basename(self.default_load_launch).replace('.launch',''), 
                                     roslib.names.SEP, 'default_cfg'])
-              self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+              self._progress_queue_cfg.add2queue(str(uuid.uuid4()), 
                                              'start default config '+str(host), 
                                              nm.starter().runNodeWithoutConfig, 
                                              (host, 'default_cfg_fkie', 'default_cfg', node_name, args, masteruri, False, self.masters[masteruri].current_user))
@@ -756,17 +768,17 @@ class MainWindow(QtGui.QMainWindow):
     if not masteruri is None:
       master = self.getMaster(masteruri, False)
     if not master is None and (self.ui.syncButton.isChecked() or external_call):
-      self._sync_dialog.resize(350,160)
+      self._sync_dialog.resize(350,190)
       if self._sync_dialog.exec_():
         try:
           host = nm.nameres().getHostname(master.masteruri)
           if not self._sync_dialog.interface_filename is None:
             # copy the interface file to remote machine
-            self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
+            self._progress_queue_sync.add2queue(str(uuid.uuid4()),
                                            'Transfer sync interface '+str(host), 
                                            nm.starter().transfer_files, 
                                            (str(host), self._sync_dialog.interface_filename, False, master.current_user))
-          self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
+          self._progress_queue_sync.add2queue(str(uuid.uuid4()), 
                                          'Start sync on '+str(host), 
                                          nm.starter().runNodeWithoutConfig, 
                                          (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, str(master.masteruri), False, master.current_user))
@@ -827,7 +839,7 @@ class MainWindow(QtGui.QMainWindow):
 
           try:
             host = nm.nameres().getHostname(self.currentMaster.masteruri)
-            self._progress_queue_sync.add2queue(str(self._progress_queue_sync.count()), 
+            self._progress_queue_sync.add2queue(str(uuid.uuid4()), 
                                            'start sync on '+str(host), 
                                            nm.starter().runNodeWithoutConfig, 
                                            (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', sync_args, str(self.currentMaster.masteruri), False, self.currentMaster.current_user))
@@ -841,6 +853,11 @@ class MainWindow(QtGui.QMainWindow):
       self.ui.syncButton.setEnabled(True)
 
   def on_master_timecheck(self):
+    # HACK: sometimes the local monitoring will not be activated. This is the detection.
+    if len(self.masters) < 2 and self.currentMaster is None:
+      self._subscribe()
+      return
+    # update the info panel of the robot. If the node manager is not selected the updates are rarer. 
     current_time = time.time()
     if self.isActiveWindow() or current_time - self._last_time_view_update > 5:
       self._last_time_view_update = current_time
@@ -902,6 +919,8 @@ class MainWindow(QtGui.QMainWindow):
     master = self.getMaster(masteruri, False)
     sim_time_enabled = self.ui.masternameLabel.isEnabled() and not master is None and master.use_sim_time
     self.ui.simTimeLabel.setVisible(sim_time_enabled)
+    launch_server_enabled = self.ui.masternameLabel.isEnabled() and (not master is None) and master.has_launch_server()
+    self.ui.launchServerLabel.setVisible(launch_server_enabled)
     self.ui.masternameLabel.setEnabled(online)
     self.ui.masterInfoFrame.setEnabled((not timestamp is None))
 
@@ -1056,19 +1075,22 @@ class MainWindow(QtGui.QMainWindow):
     params = {'Host' : ('string', 'localhost'),
               'Network(0..99)' : ('int', '0'),
               'Optional Parameter' : ('list', params_optional) }
-    dia = ParameterDialog(params)
+    dia = ParameterDialog(params, sidebar_var='Host')
     dia.setFilterVisible(False)
     dia.setWindowTitle('Start discovery')
-    dia.resize(350,280)
+    dia.resize(450,280)
     dia.setFocusField('Host')
     if dia.exec_():
       try:
         params = dia.getKeywords()
-        hostname = params['Host']
+        hostnames = params['Host'] if isinstance(params['Host'], list) else [params['Host']]
         port = params['Network(0..99)']
         discovery_type = params['Optional Parameter']['Discovery type']
-        mastername = params['Optional Parameter']['ROS Master Name']
-        masteruri = params['Optional Parameter']['ROS Master URI']
+        mastername = 'autodetect'
+        masteruri = 'ROS_MASTER_URI'
+        if len(hostnames) < 2:
+          mastername = params['Optional Parameter']['ROS Master Name']
+          masteruri = params['Optional Parameter']['ROS Master URI']
         static_hosts = params['Optional Parameter']['Static hosts']
         username = params['Optional Parameter']['Username']
         send_mcast = params['Optional Parameter']['Send MCast']
@@ -1076,30 +1098,31 @@ class MainWindow(QtGui.QMainWindow):
           static_hosts = static_hosts.replace(' ', '')
           static_hosts = static_hosts.replace('[', '')
           static_hosts = static_hosts.replace(']', '')
-        try:
-          args = []
-          if not port is None and port and int(port) < 100 and int(port) >= 0:
-            args.append(''.join(['_mcast_port:=', str(11511 + int(port))]))
-          else:
-            args.append(''.join(['_mcast_port:=', str(11511)]))
-          if not mastername == 'autodetect':
-            args.append(''.join(['_name:=', str(mastername)]))
-          args.append('_send_mcast:=%s'%str(send_mcast))
-          args.append(''.join(['_static_hosts:=[', static_hosts, ']']))
-          #TODO: remove the name parameter from the ROS parameter server
-          self._progress_queue.add2queue(str(self._progress_queue.count()), 
-                                         'start discovering on '+str(hostname), 
-                                         nm.starter().runNodeWithoutConfig, 
-                                         (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, username))
-          self._progress_queue.start()
+        for hostname in hostnames:
+          try:
+            args = []
+            if not port is None and port and int(port) < 100 and int(port) >= 0:
+              args.append(''.join(['_mcast_port:=', str(11511 + int(port))]))
+            else:
+              args.append(''.join(['_mcast_port:=', str(11511)]))
+            if not mastername == 'autodetect':
+              args.append(''.join(['_name:=', str(mastername)]))
+            args.append('_send_mcast:=%s'%str(send_mcast))
+            args.append(''.join(['_static_hosts:=[', static_hosts, ']']))
+            #TODO: remove the name parameter from the ROS parameter server
+            self._progress_queue.add2queue(str(uuid.uuid4()), 
+                                           'start discovering on '+str(hostname), 
+                                           nm.starter().runNodeWithoutConfig, 
+                                           (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, username))
 
-        except (Exception, nm.StartException), e:
-          import traceback
-          print traceback.format_exc()
-          rospy.logwarn("Error while start master_discovery for %s: %s", str(hostname), str(e))
-          WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
-                            'Error while start master_discovery',
-                            str(e)).exec_()
+          except (Exception, nm.StartException), e:
+            import traceback
+            print traceback.format_exc()
+            rospy.logwarn("Error while start master_discovery for %s: %s", str(hostname), str(e))
+            WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
+                              'Error while start master_discovery',
+                              str(e)).exec_()
+          self._progress_queue.start()
       except Exception, e:
         WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
                           'Error while parse parameter',
@@ -1111,7 +1134,7 @@ class MainWindow(QtGui.QMainWindow):
       args = []
       if network < 100 and network >= 0:
         args.append(''.join(['_mcast_port:=', str(11511 + int(network))]))
-      self._progress_queue.add2queue(str(self._progress_queue.count()), 
+      self._progress_queue.add2queue(str(uuid.uuid4()), 
                                      'start discovering on '+str(hostname), 
                                      nm.starter().runNodeWithoutConfig, 
                                      (str(hostname), 'master_discovery_fkie', 'master_discovery', 'master_discovery', args, None, False))
@@ -1132,14 +1155,14 @@ class MainWindow(QtGui.QMainWindow):
     '''
     item, path, id = activated.model().items[activated.row()]
     try:
-      self.ui.xmlFileView.setEnabled(False)
+#      self.ui.xmlFileView.setEnabled(False)
       file = activated.model().expandItem(item, path)
       if not file is None:
-        self.loadLaunchFile(path)
-      self.ui.xmlFileView.setEnabled(True)
-      self.ui.xmlFileView.setFocus(QtCore.Qt.ActiveWindowFocusReason)
+        self.loadLaunchFile(path, row=activated.row())
+#      self.ui.xmlFileView.setEnabled(True)
+#      self.ui.xmlFileView.setFocus(QtCore.Qt.ActiveWindowFocusReason)
     except Exception, e:
-      self.ui.xmlFileView.setEnabled(True)
+#      self.ui.xmlFileView.setEnabled(True)
       rospy.logwarn("Error while load launch file %s: %s", str(item), str(e))
       WarningMessageBox(QtGui.QMessageBox.Warning, "Load error", 
                         ''.join(['Error while load launch file:\n', item]),
@@ -1251,13 +1274,13 @@ class MainWindow(QtGui.QMainWindow):
             rospy.loginfo("TRANSFER the launch file to host %s@%s: %s", str(username), str(host), path)
             recursive = params['recursive']
             username = params['Username']
-            self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+            self._progress_queue_cfg.add2queue(str(uuid.uuid4()), 
                                            'transfer files to '+str(host), 
                                            nm.starter().transfer_files, 
                                            (str(host), path, False, username))
             if recursive:
               for f in LaunchConfig.getIncludedFiles(path):
-                self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+                self._progress_queue_cfg.add2queue(str(uuid.uuid4()), 
                                                'transfer files to '+str(host), 
                                                nm.starter().transfer_files, 
                                                (str(host), f, False, username))
@@ -1291,6 +1314,10 @@ class MainWindow(QtGui.QMainWindow):
     if self.editor_dialogs.has_key(files[0]):
       del self.editor_dialogs[files[0]]
 
+  def _reload_globals_at_next_start(self, file):
+    if not self.currentMaster is None:
+      self.currentMaster.reload_global_parameter_at_next_start(file)
+
   def on_load_xml_clicked(self):
     '''
     Tries to load the selected launch file. The button is only enabled and this
@@ -1301,9 +1328,9 @@ class MainWindow(QtGui.QMainWindow):
       pathItem, path, pathId = self.ui.xmlFileView.model().items[index.row()]
       path = self.ui.xmlFileView.model().expandItem(pathItem, path)
       if not path is None:
-        self.loadLaunchFile(path)
+        self.loadLaunchFile(path, row=index.row())
 
-  def loadLaunchFile(self, path, force_as_default=False, host=None):
+  def loadLaunchFile(self, path, force_as_default=False, host=None, row=None):
     '''
     Load the launch file. A ROS master mast be selected first.
     @param path: the path of the launch file.
@@ -1313,10 +1340,16 @@ class MainWindow(QtGui.QMainWindow):
     master_proxy = self.stackedLayout.currentWidget()
     if isinstance(master_proxy, MasterViewProxy):
       cursor = self.cursor()
-      self.setCursor(QtCore.Qt.WaitCursor)
-      self.ui.xmlFileView.setEnabled(False)
+#      self.setCursor(QtCore.Qt.WaitCursor)
+#      self.ui.xmlFileView.setEnabled(False)
       self.ui.xmlFileView.model().add2LoadHistory(path)
-      QtCore.QCoreApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
+      try:
+        if not row is None:
+          sm = self.ui.xmlFileView.selectionModel()
+          sm.select(self.ui.xmlFileView.model().createIndex(row, 0), QtGui.QItemSelectionModel.Select)
+      except:
+        pass
+#      QtCore.QCoreApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
       #todo: except errors on determination of the defaul_cfg name
       key_mod = QtGui.QApplication.keyboardModifiers()
       if (key_mod & QtCore.Qt.ShiftModifier) or force_as_default:
@@ -1339,8 +1372,8 @@ class MainWindow(QtGui.QMainWindow):
               params = inputDia.getKeywords()
               args.extend(launchConfig.resolveArgs([''.join([p, ":='", v, "'"]) for p,v in params.items() if v]))
             else:
-              self.ui.xmlFileView.setEnabled(True)
-              self.setCursor(cursor)
+#              self.ui.xmlFileView.setEnabled(True)
+#              self.setCursor(cursor)
               return
         except:
           import traceback
@@ -1352,7 +1385,7 @@ class MainWindow(QtGui.QMainWindow):
                              roslib.names.SEP, 
                              os.path.basename(path).replace('.launch','').replace(' ', '_'), 
                              roslib.names.SEP, 'default_cfg'])
-        self._progress_queue_cfg.add2queue(str(self._progress_queue_cfg.count()), 
+        self._progress_queue_cfg.add2queue(str(uuid.uuid4()),
                                        'start default config '+str(hostname), 
                                        nm.starter().runNodeWithoutConfig, 
                                        (str(hostname), 'default_cfg_fkie', 'default_cfg', node_name, args, master_proxy.masteruri, False, master_proxy.current_user))
@@ -1360,14 +1393,14 @@ class MainWindow(QtGui.QMainWindow):
       else:
         try:
           master_proxy.launchfiles = path
-          # update the duplicate nodes
-          self.updateDuplicateNodes()
+          # update the duplicate nodes: will be updated on master_info receive
+#          self.updateDuplicateNodes()
         except Exception, e:
           import traceback
           print traceback.format_exc()
           WarningMessageBox(QtGui.QMessageBox.Warning, "Loading launch file", path, str(e)).exec_()
-      self.ui.xmlFileView.setEnabled(True)
-      self.setCursor(cursor)
+#      self.ui.xmlFileView.setEnabled(True)
+#      self.setCursor(cursor)
     else:
       QtGui.QMessageBox.information(self, "Load of launch file",
                                     "Select a master first!", )
@@ -1428,12 +1461,23 @@ class MainWindow(QtGui.QMainWindow):
     @type affected: list
     '''
     # create a list of launch files and masters, which are affected by the changed file
-    # and are not currently n question
+    # and are not currently in question
+    if self.isActiveWindow():
+      self._changed_files[changed] = affected
+      self._check_for_changed_files()
+    else:
+      self._changed_files[changed] = affected
+
+  def _check_for_changed_files(self):
+    '''
+    Check the dictinary with changed files and notify the masters about changes.
+    '''
     new_affected = list()
-    for (muri, lfile) in affected:
-      if not (muri, lfile) in self.__in_question:
-        self.__in_question.add((muri, lfile))
-        new_affected.append((muri, lfile))
+    for changed, affected in self._changed_files.items():
+      for (muri, lfile) in affected:
+        if not (muri, lfile) in self.__in_question:
+          self.__in_question.add((muri, lfile))
+          new_affected.append((muri, lfile))
     # if there are no question to reload the launch file -> ask
     if new_affected:
       choices = dict()
@@ -1442,11 +1486,75 @@ class MainWindow(QtGui.QMainWindow):
         if not master is None:
           master.launchfile = lfile
           choices[''.join([os.path.basename(lfile), ' [', master.mastername, ']'])] = (master, lfile)
-      cfgs = SelectDialog.getValue('Reload configurations?', '<b>%s</b> was changed. Select affected configurations to reload:'%os.path.basename(changed), choices.keys(), False, True, self)
+      cfgs, ok = SelectDialog.getValue('Reload configurations?',
+                                   '<b>%s</b> was changed.<br>Select affected configurations to reload:'%', '.join([os.path.basename(f) for f in self._changed_files.keys()]), choices.keys(),
+                                   False, True,
+                                   ':/icons/crystal_clear_launch_file.png',
+                                   self)
       for (muri, lfile) in new_affected:
         self.__in_question.remove((muri, lfile))
       for c in cfgs:
         choices[c][0].launchfiles = choices[c][1]
+    self._changed_files.clear()
+
+  def on_configparamfile_changed(self, changed, affected):
+    '''
+    Signal hander to handle the changes of a configuration file referenced by a paramter value
+    @param changed: the changed file
+    @type changed: C{str}
+    @param affected: the list of tuples with masteruri and launchfile, which are affected by file change
+    @type affected: list
+    '''
+    # create a list of launch files and masters, which are affected by the changed file
+    # and are not currently in question
+    if self.isActiveWindow():
+      self._changed_files_param[changed] = affected
+      self._check_for_changed_files_param()
+    else:
+      self._changed_files_param[changed] = affected
+
+  def _check_for_changed_files_param(self):
+    '''
+    Check the dictinary with changed files and notify about the transfer of changed file.
+    '''
+    new_affected = list()
+    for changed, affected in self._changed_files_param.items():
+      for (muri, lfile) in affected:
+        if not (muri, changed) in self.__in_question:
+          self.__in_question.add((muri, changed))
+          new_affected.append((muri, changed))
+    # if there are no question to reload the launch file -> ask
+    if new_affected:
+      choices = dict()
+      for (muri, lfile) in new_affected:
+        master = self.getMaster(muri)
+        if not master is None:
+          master.launchfile = lfile
+          choices[''.join([os.path.basename(lfile), ' [', master.mastername, ']'])] = (master, lfile)
+      cfgs, ok = SelectDialog.getValue('Transfer configurations?',
+                                   'Configuration files referenced by parameter are changed.<br>Select affected configurations for copy to remote host: (don\'t forget to restart the nodes!)', 
+                                   choices.keys(), False, True,
+                                   ':/icons/crystal_clear_launch_file_transfer.png',
+                                   self)
+      for (muri, lfile) in new_affected:
+        self.__in_question.remove((muri, lfile))
+      for c in cfgs:
+        host = nm.nameres().getHostname(choices[c][0].masteruri)
+        username = choices[c][0].current_user
+        self._progress_queue_cfg.add2queue(str(uuid.uuid4()), 
+                                       'transfer files to '+str(host),
+                                       nm.starter().transfer_files,
+                                       (str(host), choices[c][1], False, username))
+      self._progress_queue_cfg.start()
+    self._changed_files_param.clear()
+
+  def changeEvent(self, event):
+    '''
+    Check for changed files, if the main gui is activated.
+    '''
+    QtGui.QMainWindow.changeEvent(self, event)
+    self._check_for_changed_files()
+    self._check_for_changed_files_param()
 
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   #%%%%%%%%%%%%%              Capabilities handling      %%%%%%%%%%%%%%%%%%%
@@ -1482,6 +1590,10 @@ class MainWindow(QtGui.QMainWindow):
       master = self.getMaster(str(url.encodedPath()).replace('show_all_screens', 'http'), False)
       if not master is None:
         master.on_show_all_screens()
+    elif url.toString().startswith('remove_all_launch_server://'):
+      master = self.getMaster(str(url.encodedPath()).replace('remove_all_launch_server', 'http'), False)
+      if not master is None:
+        master.on_remove_all_launch_server()
     elif url.toString().startswith('topic://'):
       if not self.currentMaster is None:
         self.currentMaster.show_topic_output(url.encodedPath(), False)
@@ -1514,6 +1626,8 @@ class MainWindow(QtGui.QMainWindow):
         self.currentMaster.on_log_path_copy()
     elif url.toString().startswith('launch://'):
       self._editor_dialog_open([str(url.encodedPath())], '')
+    elif url.toString().startswith('reload_globals://'):
+      self._reload_globals_at_next_start(str(url.encodedPath()).replace('reload_globals://', ''))
     else:
       QtGui.QDesktopServices.openUrl(url)
 
