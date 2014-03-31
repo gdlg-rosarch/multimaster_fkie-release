@@ -100,16 +100,28 @@ class ProgressQueue(QtCore.QObject):
   def count(self):
     return len(self.__progress_queue)
 
+  def has_id(self, id):
+    '''
+    Searches the current and planed threads for given id and returns `True` if 
+    one is found.
+    '''
+    for th in self.__progress_queue:
+      if th.id() == id:
+        return True
+    return False
+
   def _progress_thread_finished(self, id):
     try:
-      #print "PG finished", id
       val = self._progress_bar.value()
-      th = self.__progress_queue[val+1]
+      # be on the safe side that the finished thread is the first thread in the queue (avoid calls from canceled threads)
+      if id == self.__progress_queue[val].id():
+        val = val + 1
+      th = self.__progress_queue[val]
       self._progress_bar.setToolTip(th.descr)
       dscr_len = self._progress_bar.size().width()/10
       self._progress_bar.setFormat(''.join(['%v/%m - ', th.descr[0:dscr_len]]))
-      self.__progress_queue[val+1].start()
-      self._progress_bar.setValue(val+1)
+      self.__progress_queue[val].start()
+      self._progress_bar.setValue(val)
       #'print "PG finished ok", id
     except:
       #'print "PG finished err", id
@@ -142,6 +154,15 @@ class ProgressQueue(QtCore.QObject):
   def _on_progress_canceled(self):
     try:
 #      self.__progress_queue[self._progress_bar.value()].wait()
+      if self.__progress_queue:
+        try:
+          self.__progress_queue[self._progress_bar.value()].finished_signal.disconnect(self._progress_thread_finished)
+          self.__progress_queue[self._progress_bar.value()].error_signal.disconnect(self._progress_thread_error)
+          self.__progress_queue[self._progress_bar.value()].request_interact_signal.disconnect(self._on_request_interact)
+#          self.__progress_queue[self._progress_bar.value()].terminate()
+        except:
+#          print str(self.__progress_queue[self._progress_bar.value()].getName()), 'could not be terminated'
+          pass
       self.__progress_queue = []
       self._progress_frame.setVisible(False)
       self.__running = False
@@ -150,6 +171,11 @@ class ProgressQueue(QtCore.QObject):
       print traceback.format_exc()
 
   def _on_request_interact(self, id, descr, req):
+    '''
+    If the interaction of the user is needed a message dialog must be exceuted 
+    in the main Qt thread. The requests are done by different request exceptinos.
+    These are handled by this method.
+    '''
     if isinstance(req.request, nm.AuthenticationRequest):
       res, user, pw = nm.ssh()._requestPW(req.request.user, req.request.host)
       if not res:
@@ -162,7 +188,7 @@ class ProgressQueue(QtCore.QObject):
       pt.start()
     elif isinstance(req.request, nm.ScreenSelectionRequest):
       from select_dialog import SelectDialog
-      items = SelectDialog.getValue('Show screen', '', req.request.choices.keys(), False)
+      items, ok = SelectDialog.getValue('Show screen', '', req.request.choices.keys(), False)
       if not items:
         self._progress_thread_finished(id)
         return
@@ -174,7 +200,7 @@ class ProgressQueue(QtCore.QObject):
       pt.start()
     elif isinstance(req.request, nm.BinarySelectionRequest):
       from select_dialog import SelectDialog
-      items = SelectDialog.getValue('Multiple executables', '', req.request.choices, True)
+      items, ok = SelectDialog.getValue('Multiple executables', '', req.request.choices, True)
       if not items:
         self._progress_thread_finished(id)
         return
@@ -184,6 +210,26 @@ class ProgressQueue(QtCore.QObject):
       pt.error_signal.connect(self._progress_thread_error)
       pt.request_interact_signal.connect(self._on_request_interact)
       pt.start()
+    elif isinstance(req.request, nm.LaunchArgsSelectionRequest):
+      from parameter_dialog import ParameterDialog
+      inputDia = ParameterDialog(req.request.args_dict)
+      inputDia.setFilterVisible(False)
+      inputDia.setWindowTitle(''.join(['Enter the argv for ', req.request.launchfile]))
+      if inputDia.exec_():
+        params = inputDia.getKeywords()
+        argv = []
+        for p,v in params.items():
+          if v:
+            argv.append(''.join([p, ':=', v]))
+        res = argv
+        pt = ProgressThread(id, descr, req.method, (req.args+(argv,)))
+        pt.finished_signal.connect(self._progress_thread_finished)
+        pt.error_signal.connect(self._progress_thread_error)
+        pt.request_interact_signal.connect(self._on_request_interact)
+        pt.start()
+      else:
+        self._progress_thread_finished(id)
+        return
 
 
 
@@ -213,6 +259,9 @@ class ProgressThread(QtCore.QObject, threading.Thread):
     self._args = args
     self.setDaemon(True)
 
+  def id(self):
+    return self._id
+
   def run(self):
     '''
     '''
@@ -221,7 +270,10 @@ class ProgressThread(QtCore.QObject, threading.Thread):
         #'print "PG call "
         #'print "  .. ", self._target
         #print "  -- args:", self._args
-        self._target(*self._args)
+        if 'pqid' in self._target.func_code.co_varnames:
+          self._target(*self._args, pqid=self._id)
+        else:
+          self._target(*self._args)
         #print "PG call finished"
         self.finished_signal.emit(self._id)
       else:
