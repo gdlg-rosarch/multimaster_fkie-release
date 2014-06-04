@@ -50,12 +50,12 @@ class StartException(Exception):
 
 class BinarySelectionRequest(Exception):
   ''' '''
-  
+
   def __init__(self, choices, error):
     Exception.__init__(self)
     self.choices = choices
     self.error = error
-  
+
   def __str__(self):
     return "BinarySelectionRequest from "  + self.choices + "::" + repr(self.error)
 
@@ -69,7 +69,7 @@ class StartHandler(object):
   '''
   def __init__(self):
     pass
-  
+
   @classmethod
   def runNode(cls, node, launch_config, force2host=None, masteruri=None, auto_pw_request=False, user=None, pw=None, item=None):
     '''
@@ -94,6 +94,15 @@ class StartHandler(object):
       raise StartException(''.join(["Node '", node, "' not found!"]))
 
     env = list(n.env_args)
+    if n.respawn:
+      # set the respawn environment variables
+      respawn_params = cls._get_respawn_params(rospy.names.ns_join(n.namespace, n.name), launch_config.Roscfg.params)
+      if respawn_params['max'] > 0:
+        env.append(('RESPAWN_MAX', '%d'%respawn_params['max']))
+      if respawn_params['min_runtime'] > 0:
+        env.append(('RESPAWN_MIN_RUNTIME', '%d'%respawn_params['min_runtime']))
+      if respawn_params['delay'] > 0:
+        env.append(('RESPAWN_DELAY', '%d'%respawn_params['delay']))
     prefix = n.launch_prefix if not n.launch_prefix is None else ''
     if prefix.lower() == 'screen' or prefix.lower().find('screen ') != -1:
       rospy.loginfo("SCREEN prefix removed before start!")
@@ -197,7 +206,7 @@ class StartHandler(object):
         elif n.cwd == 'node':
           cwd = os.path.dirname(cmd_type)
       cls._prepareROSMaster(masteruri)
-      node_cmd = [nm.RESPAWN_SCRIPT if n.respawn else '', prefix, cmd_type]
+      node_cmd = [nm.Settings().respawn_script if n.respawn else '', prefix, cmd_type]
       cmd_args = [nm.screen().getSceenCmd(node)]
       cmd_args[len(cmd_args):] = node_cmd
       cmd_args.append(str(n.args))
@@ -242,7 +251,7 @@ class StartHandler(object):
         except nm.AuthenticationRequest as e:
           raise nm.InteractionNeededError(e, cls.runNode, (node, launch_config, force2host, masteruri, auto_pw_request))
 
-      startcmd = [env_command, nm.STARTER_SCRIPT, 
+      startcmd = [env_command, nm.Settings().start_remote_script,
                   '--package', str(n.package),
                   '--node_type', str(n.type),
                   '--node_name', str(node),
@@ -291,6 +300,27 @@ class StartHandler(object):
 #        raise nm.StartException(str('\n'.join(['Following parameter seems to use an absolute local path for remote host:', parameters, 'Use "cwd" attribute of the "node" tag to specify relative paths for remote usage!'])))
     #'print "RUN OK", node, time.time()
 
+
+  @classmethod
+  def _get_respawn_params(cls, node, params):
+    result = { 'max' : 0, 'min_runtime' : 0, 'delay': 0 }
+    respawn_max = rospy.names.ns_join(node, 'respawn/max')
+    respawn_min_runtime = rospy.names.ns_join(node, 'respawn/min_runtime')
+    respawn_delay = rospy.names.ns_join(node, 'respawn/delay')
+    try:
+      result['max'] = int(params[respawn_max].value)
+    except:
+      pass
+    try:
+      result['min_runtime'] = int(params[respawn_min_runtime].value)
+    except:
+      pass
+    try:
+      result['delay'] = int(params[respawn_delay].value)
+    except:
+      pass
+    return result
+
   @classmethod
   def _load_parameters(cls, masteruri, params, clear_params, user, pw, auto_pw_request):
     """
@@ -313,7 +343,7 @@ class StartHandler(object):
         param_server_multi.deleteParam(rospy.get_name(), p)
       r = param_server_multi()
       for code, msg, _ in r:
-        if code != 1:
+        if code != 1 and not msg.find("is not set"):
           rospy.logwarn("Failed to clear parameter: %s", msg)
 #          raise StartException("Failed to clear parameter: %s"%(msg))
 
@@ -390,6 +420,8 @@ class StartHandler(object):
     @type name: C{str} 
     @param args: the list with arguments passed to the binary
     @type args: C{[str, ...]} 
+    @param auto_pw_request: opens question dialog directly, use True only if the method is called from the main GUI thread
+    @type auto_pw_request: bool
     @raise Exception: on errors while resolving host
     @see: L{node_manager_fkie.is_local()}
     '''
@@ -452,7 +484,7 @@ class StartHandler(object):
       thread.start()
     else:
       # run on a remote machine
-      startcmd = [nm.STARTER_SCRIPT, 
+      startcmd = [nm.Settings().start_remote_script,
                   '--package', str(package),
                   '--node_type', str(type),
                   '--node_name', str(fullname)]
@@ -498,28 +530,33 @@ class StartHandler(object):
       print "Start ROS-Master with", masteruri, "..."
       # run a roscore
       from urlparse import urlparse
-      master_port = str(urlparse(masteruri).port)
+      master_port = urlparse(masteruri).port
       new_env = dict(os.environ)
       new_env['ROS_MASTER_URI'] = masteruri
-      cmd_args = [nm.ScreenHandler.getSceenCmd(''.join(['/roscore', '--', master_port])), 'roscore', '--port', master_port]
-      subprocess.Popen(shlex.split(' '.join([str(c) for c in cmd_args])), env=new_env)
-      # wait for roscore to avoid connection problems while init_node
-      result = -1
-      count = 1
-      while result == -1 and count < 11:
-        try:
-          print "  retry connect to ROS master", count, '/', 10
-          master = xmlrpclib.ServerProxy(masteruri)
-          result, uri, msg = master.getUri(rospy.get_name())
-        except:
-          time.sleep(1)
-          count += 1
-      if count >= 11:
-        raise StartException('Cannot connect to the ROS-Master: '+  str(masteruri))
+      cmd_args = '%s roscore --port %d'%(nm.ScreenHandler.getSceenCmd('/roscore--%d'%master_port), master_port)
+      print "    %s"%cmd_args
+      try:
+        subprocess.Popen(shlex.split(cmd_args), env=new_env)
+        # wait for roscore to avoid connection problems while init_node
+        result = -1
+        count = 1
+        while result == -1 and count < 11:
+          try:
+            print "  retry connect to ROS master", count, '/', 10
+            master = xmlrpclib.ServerProxy(masteruri)
+            result, uri, msg = master.getUri(rospy.get_name())
+          except:
+            time.sleep(1)
+            count += 1
+        if count >= 11:
+          raise StartException('Cannot connect to the ROS-Master: '+  str(masteruri))
+      except Exception as e:
+        import sys
+        print  >> sys.stderr, e
+        raise
     finally:
       socket.setdefaulttimeout(None)
 
-    
   def callService(self, service_uri, service, service_type, service_args=[]):
     '''
     Calls the service and return the response.
@@ -634,13 +671,17 @@ class StartHandler(object):
     else:
       request = '[]' if len(nodes) != 1 else nodes[0]
       try:
-        output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--ros_log_path', request], user, pw, auto_pw_request)
+        socket.setdefaulttimeout(3)
+        output, error, ok = nm.ssh().ssh_exec(host, [nm.Settings().start_remote_script, '--ros_log_path', request], user, pw, auto_pw_request)
         if ok:
           return output
         else:
           raise StartException(str(''.join(['Get log path from "', host, '" failed:\n', error])))
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.copylogPath2Clipboards, (host, nodes, auto_pw_request))
+      finally:
+        socket.setdefaulttimeout(None)
+
 
   @classmethod
   def openLog(cls, nodename, host, user=None):
@@ -661,7 +702,7 @@ class StartHandler(object):
       found = False
       screenLog = nm.screen().getScreenLogFile(node=nodename)
       if os.path.isfile(screenLog):
-        cmd = nm.terminal_cmd([nm.LESS, screenLog], title_opt)
+        cmd = nm.settings().terminal_cmd([nm.settings().log_viewer, screenLog], title_opt)
         rospy.loginfo("open log: %s", cmd)
         ps = subprocess.Popen(shlex.split(cmd))
         # wait for process to avoid 'defunct' processes
@@ -673,7 +714,7 @@ class StartHandler(object):
       roslog = nm.screen().getROSLogFile(nodename)
       if os.path.isfile(roslog):
         title_opt = title_opt.replace('LOG', 'ROSLOG')
-        cmd = nm.terminal_cmd([nm.LESS, roslog], title_opt)
+        cmd = nm.settings().terminal_cmd([nm.settings().log_viewer, roslog], title_opt)
         rospy.loginfo("open ROS log: %s", cmd)
         ps = subprocess.Popen(shlex.split(cmd))
         # wait for process to avoid 'defunct' processes
@@ -683,12 +724,12 @@ class StartHandler(object):
         found = True
       return found
     else:
-      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_screen_log', nodename], title_opt, user)
+      ps = nm.ssh().ssh_x11_exec(host, [nm.Settings().start_remote_script, '--show_screen_log', nodename], title_opt, user)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
       thread.setDaemon(True)
       thread.start()
-      ps = nm.ssh().ssh_x11_exec(host, [nm.STARTER_SCRIPT, '--show_ros_log', nodename], title_opt.replace('LOG', 'ROSLOG'), user)
+      ps = nm.ssh().ssh_x11_exec(host, [nm.Settings().start_remote_script, '--show_ros_log', nodename], title_opt.replace('LOG', 'ROSLOG'), user)
       # wait for process to avoid 'defunct' processes
       thread = threading.Thread(target=ps.wait)
       thread.setDaemon(True)
@@ -720,7 +761,7 @@ class StartHandler(object):
         os.remove(roslog)
     else:
       try:
-        output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--delete_logs', nodename], user, pw, auto_pw_request)
+        output, error, ok = nm.ssh().ssh_exec(host, [nm.Settings().start_remote_script, '--delete_logs', nodename], user, pw, auto_pw_request)
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
 
@@ -779,7 +820,7 @@ class StartHandler(object):
         else:
           if not CACHED_PKG_PATH.has_key(host):
             CACHED_PKG_PATH[host] = dict()
-          output, error, ok = nm.ssh().ssh_exec(host, [nm.STARTER_SCRIPT, '--package', pkg_name], user, pw, auto_pw_request)
+          output, error, ok = nm.ssh().ssh_exec(host, [nm.Settings().start_remote_script, '--package', pkg_name], user, pw, auto_pw_request)
         if ok:
           if error:
             rospy.logwarn("ERROR while transfer %s to %s: %s", file, host, error)
