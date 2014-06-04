@@ -122,7 +122,7 @@ class CapabilityHeader(QtGui.QHeaderView):
         text = examples.html_body(text)
       except:
         import traceback
-        rospy.logwarn("Error while generate description for %s: %s", self._data[index]['name'], str(traceback.format_exc()))
+        rospy.logwarn("Error while generate description for %s: %s", self._data[index]['name'], traceback.format_exc())
       self.description_requested_signal.emit(title, text)
 
   def setDescription(self, index, cfg, name, displayed_name, type, description, images):
@@ -139,7 +139,7 @@ class CapabilityHeader(QtGui.QHeaderView):
       obj['description'] = description
       del obj['images'][:]
       for image_path in images:
-        img = ''.join([nm.PACKAGE_DIR,image_path])
+        img = os.path.join(nm.settings().PACKAGE_DIR, image_path)
         if os.path.isfile(img):
           obj['images'].append(QtGui.QPixmap(img))
 
@@ -162,7 +162,7 @@ class CapabilityHeader(QtGui.QHeaderView):
         obj['description'] = description
       if not obj['images']:
         for image_path in images:
-          img = ''.join([nm.PACKAGE_DIR,image_path])
+          img = os.path.join(nm.settings().PACKAGE_DIR, image_path)
           if os.path.isfile(img):
             obj['images'].append(QtGui.QPixmap(img))
 
