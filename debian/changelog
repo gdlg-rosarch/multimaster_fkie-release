@@ -1,0 +1,72 @@
+ros-groovy-master-discovery-fkie (0.3.11-0quantal) quantal; urgency=high
+
+  * master_discovery_fkie: added some error catches to solve problems with removing of interfaces
+  * master_discovery_fkie: fixed a short timestamp represantation
+  * Contributors: Alexander Tiderko
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Tue, 03 Jun 2014 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.10-0quantal) quantal; urgency=high
+
+  * master_discovery_fkie: unsubscribe from parameter at the end
+  * master_discovery_fkie: remove invalid roslaunch uris from ROS Master
+  * multimaster_fkie: fixed problems detected by catkin_lint
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Sun, 30 Mar 2014 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.9-0quantal) quantal; urgency=high
+
+  * master_discovery_fkie: added warning outputs on errors
+  * multimaster_fkie: moved .gitignore to top level
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 11 Dec 2013 23:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.8-0quantal) quantal; urgency=high
+
+  * master_discovery_fkie: added output info about approx. netload
+  * multimaster_fkie: added a possibility to deaktivate the multicast heart bearts
+  * master_discovery_fkie: description in der package.xml changed
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Mon, 09 Dec 2013 23:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.7-0quantal) quantal; urgency=high
+
+  * multimaster_fkie: fixed problems with resolving service types while sync
+    while synchronization not all topics and services can be synchronized
+    because of filter or errors. A detection for this case was added.
+  * node_manager_fkie: fix node matching
+  * master_discovery_fkie: do not publish not resolvable ROS MASTER URI to own ROS network
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 16 Oct 2013 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.6-0quantal) quantal; urgency=high
+
+  * multimaster_fkie: added SyncServiceInfo message to detect changes on services
+  * master_discovery_fkie: fixed the origin master uri for services
+  * master_discovery_fkie: fixed the result of the synchronized nodes (handle the restart of the nodes without stop the running node)
+  * master_discovery_fkie: fixed the test of local changes -> not all changes are propageted to other hosts
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Mon, 16 Sep 2013 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.5-0quantal) quantal; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Thu, 05 Sep 2013 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.4-0quantal) quantal; urgency=high
+
+
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Wed, 04 Sep 2013 22:00:00 -0000
+
+ros-groovy-master-discovery-fkie (0.3.3-0quantal) quantal; urgency=high
+
+  * master_discovery_fkie: fixed out, if the ROS_MASTER_URI refs to 'localhost'
+  * master_discovery_fkie: fixed the load interface
+  * multimaster_fkie: (*) added additional filtered interface to master_discovery rpc-server to get a filtered MasterInfo and reduce the load on network.
+    (*) added the possibility to sync remote nodes using ~sync_remote_nodes parameter
+
+ -- Alexander Tiderko <alexander.tiderko@gmail.com>  Tue, 03 Sep 2013 22:00:00 -0000
+
+
