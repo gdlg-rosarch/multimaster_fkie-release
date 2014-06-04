@@ -140,6 +140,7 @@ class MasterViewProxy(QtGui.QWidget):
     self._tmpObjects = []
     self.__master_state = None
     self.__master_info = None
+    self.__force_update = False
     self.__configs = dict() # [file name] = LaunchConfig
 #    self.rosconfigs = dict() # [launch file path] = LaunchConfig()
     self.__in_question = [] # stores the changed files, until the user is interacted
@@ -153,7 +154,7 @@ class MasterViewProxy(QtGui.QWidget):
     self.__last_info_type = None # {Node, Topic, Service}
     self.__last_info_text = None
     self.__use_sim_time = False
-    self.__current_user = nm.ssh().USER_DEFAULT
+    self.__current_user = nm.settings().default_user
     self.__robot_icons = []
     self.__current_robot_icon = None
     self.__current_parameter_robot_icon = ''
@@ -285,7 +286,7 @@ class MasterViewProxy(QtGui.QWidget):
     self.parameterHandler.parameter_list_signal.connect(self._on_param_list)
     self.parameterHandler.parameter_values_signal.connect(self._on_param_values)
     self.parameterHandler.delivery_result_signal.connect(self._on_delivered_values)
-    #create a handler to request sim paramter
+    #create a handler to request sim parameter
     self.parameterHandler_sim = ParameterHandler()
 #    self.parameterHandler_sim.parameter_list_signal.connect(self._on_param_list)
     self.parameterHandler_sim.parameter_values_signal.connect(self._on_sim_param_values)
@@ -324,6 +325,7 @@ class MasterViewProxy(QtGui.QWidget):
 #     screen_menu.addAction(self.showAllScreensAct)
 #     self.masterTab.ioButton.setMenu(screen_menu)
     self.masterTab.ioButton.setEnabled(True)
+    self.masterTab.tabWidget.currentChanged.connect(self.on_tab_current_changed)
     self._shortcut_screen_show_all = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Shift+S", "Show all available screens")), self)
     self._shortcut_screen_show_all.activated.connect(self.on_show_all_screens)
     self._shortcut_screen_kill = QtGui.QShortcut(QtGui.QKeySequence(self.tr("Shift+Backspace", "Kill Screen")), self)
@@ -433,6 +435,9 @@ class MasterViewProxy(QtGui.QWidget):
       else:
         update_result = self.__master_info.updateInfo(master_info)
 #         print "MINFO", self.__master_info.listedState()
+      # we receive the master info from remove nodes first -> skip
+      if self.__master_info is None:
+        return
       try:
         # request the info of new remote nodes
         hosts2update = set([nm.nameres().getHostname(self.__master_info.getNode(nodename).uri) for nodename in update_result[0]])
@@ -445,16 +450,17 @@ class MasterViewProxy(QtGui.QWidget):
 #      cputimes = os.times()
 #      cputime_init = cputimes[0] + cputimes[1]
       # update nodes in the model
-      if update_result[0] or update_result[1] or update_result[2]:
+      if update_result[0] or update_result[1] or update_result[2] or self.__force_update:
         self.updateRunningNodesInModel(self.__master_info)
       # Updates the topic view based on the current master information.
-      if update_result[3] or update_result[4] or update_result[5]:
+      if update_result[3] or update_result[4] or update_result[5] or self.__force_update:
         self.topic_model.updateModelData(self.__master_info.topics, update_result[3], update_result[4], update_result[5])
       # Updates the service view based on the current master information.
-      if update_result[6] or update_result[7] or update_result[8]:
+      if update_result[6] or update_result[7] or update_result[8] or self.__force_update:
         self.service_model.updateModelData(self.__master_info.services, update_result[6], update_result[7], update_result[8])
         # update the default configuration
         self.updateDefaultConfigs(self.__master_info)
+      self.__force_update = False
 #      cputimes = os.times()
 #      cputime = cputimes[0] + cputimes[1] - cputime_init
 #      print "  update on ", self.__master_info.mastername if not self.__master_info is None else self.__master_state.name, cputime
@@ -469,6 +475,9 @@ class MasterViewProxy(QtGui.QWidget):
   @property
   def use_sim_time(self):
     return self.__use_sim_time
+
+  def force_next_update(self):
+    self.__force_update = True
 
   def markNodesAsDuplicateOf(self, running_nodes):
     '''
@@ -1081,20 +1090,27 @@ class MasterViewProxy(QtGui.QWidget):
   def on_node_expanded(self, index):
     pass
 
-  def _create_html_list(self, title, items, type=None):
+  def _create_html_list(self, title, items, type=None, name=''):
     '''
     :param type: LAUNCH, TOPIC, NODE, SERVICE
     :type type: str
     '''
     result = ''
     if items:
-      result = ''.join([result, '<b><u>', title,'</u></b>'])
+      result = '%s<b><u>%s</u></b>'%(result, title)
       if len(items) > 1:
-        result = ''.join([result, ' <span style="color:gray;">[', str(len(items)),']</span>'])
-      result = ''.join([result, '<br><ul><span></span>'])
+        result = '%s <span style="color:gray;">[%d]</span>'%(result, len(items))
+      result = '%s<br><ul><span></span>'%result
       items.sort()
       for i in items:
         item = i
+        # reduce the displayed name
+        item_name = i
+        if name:
+          item_name = item_name.replace('%s%s'%(name, roslib.names.SEP), '~', 1)
+          ns = roslib.names.namespace(name)
+          if item_name.startswith(ns) and ns != roslib.names.SEP:
+            item_name = item_name.replace(ns, '', 1)
         if type in ['TOPIC_PUB', 'TOPIC_SUB']:
           # determine the count of publisher or subscriber
           count = None
@@ -1102,21 +1118,40 @@ class MasterViewProxy(QtGui.QWidget):
             count = len(self.__master_info.getTopic(i).publisherNodes) if type == 'TOPIC_SUB' else len(self.__master_info.getTopic(i).subscriberNodes)
           except:
             pass
-#          item = ''.join([i, ' <a href="topic://', str(i),'">[echo] <a href="topichz://', str(i),'">[hz] ', '</a>'])
-          item = ''.join(['<a href="topic://', str(i),'">', i, '</a>'])
+          item = '<a href="topic://%s">%s</a>'%(i, item_name)
           # add the count
           if not count is None:
-            item = ''.join(['<span style="color:gray;">_', str(count), '_/</span>',item])
+            item = '<span style="color:gray;">_%d_/ </span>%s'%(count, item)
         elif type == 'SERVICE':
-          item = ''.join(['<a href="service://', str(i),'">', i, '</a>'])
+          item = '<a href="service://%s">%s</a>'%(i, item_name)
         elif type == 'LAUNCH':
-          item = ''.join(['<a href="launch://', str(i),'">', i, '</a>'])
+          item = '<a href="launch://%s">%s</a>'%(i, item_name)
           if i in self.__configs and self.masteruri in self.__configs[i].global_param_done:
-            item = ''.join([item, '<br>', '<a href="reload_globals://', str(i),'">', '<font color="#339900">', 'reload global parameter @next start', '</font>', '</a>'])
-#        result = ''.join([result, '<li>', item, '</li>'])
-        result = ''.join([result, '\n', item, '<br>'])
-      result = ''.join([result, '</ul>'])
+            item = '%s<br><a href="reload_globals://%s"><font color="#339900">reload global parameter @next start</font></a>'%(item, i)
+        result = '%s\n%s<br>'%(result, item)
+      result = '%s</ul>'%(result,)
     return result
+
+  def on_tab_current_changed(self, index):
+    if self.masterTab.tabWidget.tabText(index) == 'Topics':
+      # select the topics of the selected node in the "Topic" view
+      selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
+      selectedNodes = self.nodesFromIndexes(selections)
+      if len(selectedNodes) == 1:
+        node = selectedNodes[0]
+        selected_topics = self.topic_model.index_from_names(node.published, node.subscribed)
+        for s in selected_topics:
+          self.masterTab.topicsView.selectionModel().select(self.topic_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
+    elif self.masterTab.tabWidget.tabText(index) == 'Services':
+      # select the services of the selected node in the "Services" view
+      selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
+      selectedNodes = self.nodesFromIndexes(selections)
+      if len(selectedNodes) == 1:
+        node = selectedNodes[0]
+        selected_services = self.service_model.index_from_names(node.services)
+        for s in selected_services:
+          self.masterTab.servicesView.selectionModel().select(self.service_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
+
 
   def on_node_selection_changed(self, selected, deselected, force_emit=False):
     '''
@@ -1149,14 +1184,6 @@ class MasterViewProxy(QtGui.QWidget):
     selectedNodes = self.nodesFromIndexes(selections)
     if len(selectedNodes) == 1:
       node = selectedNodes[0]
-      # select the topics of the node in the "Topic" view
-      selected_topics = self.topic_model.index_from_names(node.published, node.subscribed)
-      for s in selected_topics:
-        self.masterTab.topicsView.selectionModel().select(self.topic_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
-      # select the services of the node in the "Services" view
-      selected_services = self.service_model.index_from_names(node.services)
-      for s in selected_services:
-        self.masterTab.servicesView.selectionModel().select(self.service_proxyModel.mapFromSource(s), QtGui.QItemSelectionModel.Select)
       # create description for a node
       ns, sep, name = node.name.rpartition(rospy.names.SEP)
       text = ''.join(['<font size="+1"><b>', '<span style="color:gray;">', str(ns), sep, '</span><b>', str(name), '</b></font><br>'])
@@ -1192,9 +1219,9 @@ class MasterViewProxy(QtGui.QWidget):
           text = ''.join([text, '<dt><font color="#CC0000"><b>the node does not respond: </b></font>'])
           text = ''.join([text, '<a href="unregister_node://', node.name,'">', 'unregister</a></dt>'])
       text = ''.join([text, '</dl>'])
-      text = ''.join([text, self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB')])
-      text = ''.join([text, self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB')])
-      text = ''.join([text, self._create_html_list('Services:', node.services, 'SERVICE')])
+      text = ''.join([text, self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB', node.name)])
+      text = ''.join([text, self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB', node.name)])
+      text = ''.join([text, self._create_html_list('Services:', node.services, 'SERVICE', node.name)])
       # set loaunch file paths
       text = ''.join([text, self._create_html_list('Loaded Launch Files:', launches, 'LAUNCH')])
       text = ''.join([text, self._create_html_list('Default Configurations:', default_cfgs)])
@@ -1274,7 +1301,7 @@ class MasterViewProxy(QtGui.QWidget):
       if self.__last_info_type == 'Topic' and (self.__last_info_text != info_text or force_emit):
         self.__last_info_text = info_text
         self.description_signal.emit(topic.name, info_text)
-  
+
   def _href_from_msgtype(self, type):
     result = type
     if type:
@@ -1617,7 +1644,7 @@ class MasterViewProxy(QtGui.QWidget):
         self.stop_nodes(selectedNodes)
       finally:
         self.setCursor(cursor)
-  
+
   def stop_node(self, node, force=False):
     if not node is None and not node.uri is None and (not self._is_in_ignore_list(node.name) or force):
       try:
@@ -1907,9 +1934,7 @@ class MasterViewProxy(QtGui.QWidget):
       nodenames.append(n.name)
     try:
       host = nm.nameres().getHostname(self.masteruri)
-      socket.setdefaulttimeout(3)
       path_on_host = nm.starter().copylogPath2Clipboards(host, nodenames, True)
-      socket.setdefaulttimeout(None)
       QtGui.QApplication.clipboard().setText(''.join([getpass.getuser() if self.is_local else self.current_user, '@', host, ':', path_on_host]))
     except Exception as e:
       WarningMessageBox(QtGui.QMessageBox.Warning, "Get log path", 
@@ -2011,7 +2036,7 @@ class MasterViewProxy(QtGui.QWidget):
         inputDia.show()
       except:
         import traceback
-        rospy.logwarn("Error on retrieve parameter for %s: %s", str(node.name), str(traceback.format_exc()))
+        rospy.logwarn("Error on retrieve parameter for %s: %s", str(node.name), traceback.format_exc())
 
   def on_save_clicked(self):
     (fileName, filter) = QtGui.QFileDialog.getSaveFileName(self,
@@ -2331,7 +2356,7 @@ class MasterViewProxy(QtGui.QWidget):
     ns = '/'
     if selectedParameter:
       ns = roslib.names.namespace(selectedParameter[0][0])
-    fields = {'name' : ('string', ['', ns]), 'type' : ('string', ['string', 'int', 'float', 'bool']), 'value': ('string', '')}
+    fields = {'name' : ('string', ['', ns]), 'type' : ('string', ['string', 'int', 'float', 'bool', 'list']), 'value': ('string', '')}
     newparamDia = ParameterDialog(fields, parent=self)
     newparamDia.setWindowTitle('Add new parameter')
     newparamDia.setFilterVisible(False)
@@ -2345,6 +2370,18 @@ class MasterViewProxy(QtGui.QWidget):
           value = float(params['value'])
         elif params['type'] == 'bool':
           value = bool(params['value'].lower() in ("yes", "true", "t", "1"))
+        elif params['type'] == 'list':
+          try:
+            import yaml
+            value = [yaml.load(params['value'])]
+            # if there is no YAML, load() will return an
+            # empty string.  We want an empty dictionary instead
+            # for our representation of empty.
+            if value is None:
+              value = []
+          except yaml.MarkedYAMLError, e:
+            QtGui.QMessageBox.warning(self, self.tr("Warning"), "yaml error: %s"%str(e), QtGui.QMessageBox.Ok)
+            return
         else:
           value = params['value']
         self.parameterHandler.deliverParameter(self.masteruri, {params['name'] : value})
@@ -2372,10 +2409,10 @@ class MasterViewProxy(QtGui.QWidget):
           rospy.logwarn("Error on delete parameter '%s': %s", parameter, msg)
     except:
       import traceback
-      rospy.logwarn("Error on delete parameter: %s", str(traceback.format_exc()))
+      rospy.logwarn("Error on delete parameter: %s", traceback.format_exc())
       WarningMessageBox(QtGui.QMessageBox.Warning, "Warning", 
                         'Error while delete a parameter to the ROS parameter server',
-                        str(traceback.format_exc())).exec_()
+                        traceback.format_exc()).exec_()
     else:
       self.on_get_parameter_clicked()
     finally:
@@ -2383,7 +2420,7 @@ class MasterViewProxy(QtGui.QWidget):
 
   def on_save_parameter_clicked(self):
     '''
-    Stores selected paramter to a file.
+    Stores selected parameter to a file.
     '''
     selectedParameter = self.parameterFromIndexes(self.masterTab.parameterView.selectionModel().selectedIndexes())
     if selectedParameter:
@@ -2428,10 +2465,10 @@ class MasterViewProxy(QtGui.QWidget):
         val = l
         if isinstance(l, (str, unicode)):
           val = l.replace("\\n", "\n")
-          result.append("".join([val]))
+#          result.append("".join([val]))
         elif isinstance(l, list):
           val = self._replaceDoubleSlash(l)
-          result.append(val)
+        result.append(val)
       return result
     return liste
 
@@ -2448,9 +2485,19 @@ class MasterViewProxy(QtGui.QWidget):
         elif isinstance(item.value, float):
           value = float(item.text())
         elif isinstance(item.value, list):
-          import yaml
-          value = yaml.load(item.text())
-          value = self._replaceDoubleSlash(value)
+          try:
+            import yaml
+            value = yaml.load(item.text())
+            # if there is no YAML, load() will return an
+            # empty string.  We want an empty dictionary instead
+            # for our representation of empty.
+            if value is None:
+              value = []
+            value = self._replaceDoubleSlash(value)
+          except yaml.MarkedYAMLError, e:
+            QtGui.QMessageBox.warning(self, self.tr("Warning"), "yaml error: %s"%str(e), QtGui.QMessageBox.Ok)
+            item.setText(unicode(item.value))
+            return
         else:
           value = item.text()
         self.parameterHandler.deliverParameter(self.masteruri, {item.name : value})
@@ -2549,7 +2596,7 @@ class MasterViewProxy(QtGui.QWidget):
             for key, value in val.items():
               self.launch_server_handler.updateLaunchServerInfo(value)
     else:
-      rospy.logwarn("Error on retrieve sim parameter value from %s: %s", str(masteruri), str(msg))
+      rospy.logwarn("Error on retrieve sim parameter value from %s: %s", str(masteruri), msg)
     if not robot_icon_found:
       self.__current_parameter_robot_icon = ''
       self.update_robot_icon()
@@ -2616,7 +2663,7 @@ class MasterViewProxy(QtGui.QWidget):
   def on_shortcut_collapse_all(self):
     self.masterTab.nodeTreeView.selectionModel().clearSelection()
     self.masterTab.nodeTreeView.collapseAll()
-    
+
   def on_copy_x_pressed(self):
     result = ''
     if self.masterTab.nodeTreeView.hasFocus():
@@ -2683,6 +2730,7 @@ class ParameterSortFilterProxyModel(QtGui.QSortFilterProxyModel):
     '''
     index0 = self.sourceModel().index(sourceRow, 0, sourceParent)
     index1 = self.sourceModel().index(sourceRow, 1, sourceParent)
+    index2 = self.sourceModel().index(sourceRow, 2, sourceParent)
     regex = self.filterRegExp()
     return (regex.indexIn(self.sourceModel().data(index0, ParameterNameItem.NAME_ROLE)) != -1
-            or regex.indexIn(self.sourceModel().data(index1, ParameterValueItem.VALUE_ROLE)) != -1)
+            or regex.indexIn(self.sourceModel().data(index2, ParameterValueItem.VALUE_ROLE)) != -1)
