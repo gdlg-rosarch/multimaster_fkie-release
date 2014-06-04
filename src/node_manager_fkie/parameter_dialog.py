@@ -58,11 +58,12 @@ class MyComboBox(QtGui.QComboBox):
     key_mod = QtGui.QApplication.keyboardModifiers()
     if key_mod & QtCore.Qt.ShiftModifier and (event.key() == QtCore.Qt.Key_Delete):
       try:
-        if self.currentText():
+        curr_text = self.currentText()
+        if curr_text:
           for i in range(self.count()):
-            if self.currentText() == self.itemText(i):
+            if curr_text == self.itemText(i):
               self.removeItem(i)
-              self.remove_item_signal.emit(self.currentText())
+              self.remove_item_signal.emit(curr_text)
               self.clearEditText()
       except:
         import traceback
@@ -82,12 +83,12 @@ class ParameterDescription(object):
       self._type = 'list'
     self._value = value
     self._widget = widget
-    self._base_type, self._is_array_type, self._array_length = roslib.msgs.parse_type(self._type)
+    try:
+      self._base_type, self._is_array_type, self._array_length = roslib.msgs.parse_type(self._type)
+    except:
+      pass
     if msg_type == 'binary':
       self._base_type = msg_type
-    self._is_primitive_type =  self._base_type in roslib.msgs.PRIMITIVE_TYPES or self._base_type in ['int', 'float', 'time', 'duration', 'binary']
-    self._is_time_type = self._base_type in ['time', 'duration']
-    self._is_binary_type = self._base_type in ['binary']
 
   def __repr__(self):
     return ''.join([self._name, ' [', self._type, ']'])
@@ -114,19 +115,24 @@ class ParameterDescription(object):
     return result
 
   def isArrayType(self):
-    return self._is_array_type
+    # handle representation of `rosparam`
+    return self._is_array_type or self._type in ['[]']
 
   def arrayLength(self):
     return self._array_length
 
   def isPrimitiveType(self):
-    return self._is_primitive_type
+    result = self._base_type in roslib.msgs.PRIMITIVE_TYPES 
+    result = result or self._base_type in ['int', 'float', 'time', 'duration', 'binary']
+    # if value is a string, the list is represented as a string, see `rosparam`
+    result = result or self._type in ['[]']
+    return result
 
   def isTimeType(self):
-    return self._is_time_type
+    return self._base_type in ['time', 'duration']
 
   def isBinaryType(self):
-    return self._is_binary_type
+    return self._base_type in ['binary']
 
   def baseType(self):
     return self._base_type
@@ -150,17 +156,27 @@ class ParameterDescription(object):
       elif value:
         nm.history().addParamCache(self.fullName(), value)
         if self.isArrayType():
-          value = value.lstrip('[').rstrip(']').split(',')
+          value = value.lstrip('[').rstrip(']')
           if 'int' in self.baseType():
-            self._value = map(int, value)
+            self._value = map(int, value.split(','))
           elif 'float' in self.baseType():
-            self._value = map(float, value)
+            self._value = map(float, value.split(','))
           elif 'bool' in self.baseType():
-            self._value = map(str2bool, value)
+            self._value = map(str2bool, value.split(','))
           elif self.isBinaryType():
-            self._value = str(value)
+            self._value = value
           else:
-            self._value = map(str, value)#[ s.encode(sys.getfilesystemencoding()) for s in value]
+#            self._value = map(str, value)#[ s.encode(sys.getfilesystemencoding()) for s in value]
+            try:
+              import yaml
+              self._value = [yaml.load(value)]
+              # if there is no YAML, load() will return an
+              # empty string.  We want an empty dictionary instead
+              # for our representation of empty.
+              if self._value is None:
+                self._value = []
+            except yaml.MarkedYAMLError, e:
+              raise Exception("Field [%s] yaml error: %s"%(self.fullName(), str(e)))
           if not self.arrayLength() is None and self.arrayLength() != len(self._value):
             raise Exception(''.join(["Field [", self.fullName(), "] has incorrect number of elements: ", str(len(self._value)), " != ", str(self.arrayLength())]))
         else:
@@ -235,7 +251,7 @@ class ParameterDescription(object):
         result = QtGui.QCheckBox(parent=parent)
         result.setObjectName(self.name())
         if not isinstance(value, bool):
-          value = str2bool(value)
+          value = str2bool(value[0] if isinstance(value, list) else value)
         result.setChecked(value)
       else:
         result = MyComboBox(parent=parent)
@@ -623,7 +639,7 @@ class ParameterDialog(QtGui.QDialog):
   This dialog creates an input mask for the given parameter and their types.
   '''
 
-  def __init__(self, params=dict(), buttons=QtGui.QDialogButtonBox.Cancel|QtGui.QDialogButtonBox.Ok, parent=None):
+  def __init__(self, params=dict(), buttons=QtGui.QDialogButtonBox.Cancel|QtGui.QDialogButtonBox.Ok, sidebar_var='', parent=None):
     '''
     Creates an input dialog.
     @param params: a dictionary with parameter names and (type, values). 
@@ -634,9 +650,11 @@ class ParameterDialog(QtGui.QDialog):
     QtGui.QDialog.__init__(self, parent=parent)
     self.setObjectName(' - '.join(['ParameterDialog', str(params)]))
 
-    self.__current_path = os.path.expanduser('~')
-
-    self.verticalLayout = QtGui.QVBoxLayout(self)
+    self.__current_path = nm.settings().current_dialog_path
+    self.horizontalLayout = QtGui.QHBoxLayout(self)
+    self.horizontalLayout.setObjectName("horizontalLayout")
+    self.horizontalLayout.setContentsMargins(1, 1, 1, 1)
+    self.verticalLayout = QtGui.QVBoxLayout()
     self.verticalLayout.setObjectName("verticalLayout")
     self.verticalLayout.setContentsMargins(1, 1, 1, 1)
     # add filter row
@@ -688,7 +706,23 @@ class ParameterDialog(QtGui.QDialog):
     self.buttonBox.accepted.connect(self.accept)
     self.buttonBox.rejected.connect(self.reject)
     self.verticalLayout.addWidget(self.buttonBox)
+    self.horizontalLayout.addLayout(self.verticalLayout)
 
+    # add side bar for checklist
+    values = nm.history().cachedParamValues('/%s'%sidebar_var)
+    self.sidebar_frame = QtGui.QFrame()
+    self.sidebar_frame.setObjectName(sidebar_var)
+    sidebarframe_verticalLayout = QtGui.QVBoxLayout(self.sidebar_frame)
+    sidebarframe_verticalLayout.setObjectName("sidebarframe_verticalLayout")
+    sidebarframe_verticalLayout.setContentsMargins(1, 1, 1, 1)
+    if len(values) > 1 and sidebar_var in params:
+      self.horizontalLayout.addWidget(self.sidebar_frame)
+      self.sidebar_default_val = values[0]
+      values.sort()
+      for v in values:
+        checkbox = QtGui.QCheckBox(v)
+        self.sidebar_frame.layout().addWidget(checkbox)
+      self.sidebar_frame.layout().addItem(QtGui.QSpacerItem(100, 20, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding))
     # set the input fields
     if params:
       self.content.createFieldFromValue(params)
@@ -769,7 +803,22 @@ class ParameterDialog(QtGui.QDialog):
     @returns: a directory with parameter and value for all entered fields.
     @rtype: C{dict(str(param) : str(value))}
     '''
-    return self.content.value()
+    # get the results of sidebar
+    sidebar_list = []
+    sidebar_name = self.sidebar_frame.objectName()
+    for j in range(self.sidebar_frame.layout().count()-1):
+      w = self.sidebar_frame.layout().itemAt(j).widget()
+      if isinstance(w, QtGui.QCheckBox):
+        if w.checkState() == QtCore.Qt.Checked:
+          sidebar_list.append(w.text())
+    result = self.content.value()
+    # add the sidebar results
+    if sidebar_name in result:
+      # skip the default value, if elements are selected in the side_bar
+      if len(sidebar_list) == 0 or self.sidebar_default_val != result[sidebar_name]:
+        sidebar_list.append(result[sidebar_name])
+      result[sidebar_name] = list(set(sidebar_list))
+    return result
 
   def _save_parameter(self):
     try:
@@ -780,6 +829,7 @@ class ParameterDialog(QtGui.QDialog):
                                                "YAML files (*.yaml);;All files (*)")
       if fileName:
         self.__current_path = os.path.dirname(fileName)
+        nm.settings().current_dialog_path = os.path.dirname(fileName)
         text = yaml.dump(self.content.value(), default_flow_style=False)
         with open(fileName, 'w+') as f:
           f.write(text)
@@ -799,6 +849,7 @@ class ParameterDialog(QtGui.QDialog):
                                                    "YAML files (*.yaml);;All files (*)")
       if fileName:
         self.__current_path = os.path.dirname(fileName)
+        nm.settings().current_dialog_path = os.path.dirname(fileName)
         with open(fileName, 'r') as f:
 #          print yaml.load(f.read())
           self.content.set_values(yaml.load(f.read()))
@@ -901,7 +952,7 @@ class MasterParameterDialog(ParameterDialog):
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
   def _on_add_parameter(self):
-    params_arg = {'namespace' : ('string', self.ns), 'name' : ('string', ''), 'type' : ('string', ['string', 'int', 'float', 'bool']), 'value' : ('string', '') }
+    params_arg = {'namespace' : ('string', self.ns), 'name' : ('string', ''), 'type' : ('string', ['string', 'int', 'float', 'bool', 'list']), 'value' : ('string', '') }
     dia = ParameterDialog(params_arg)
     dia.setWindowTitle('Add new parameter')
     dia.resize(360,150)
@@ -916,6 +967,17 @@ class MasterParameterDialog(ParameterDialog):
             value = float(params['value'])
           elif params['type'] == 'bool':
             value = str2bool(params['value'])
+          elif params['type'] == 'list':
+            try:
+              import yaml
+              value = [yaml.load(params['value'])]
+              # if there is no YAML, load() will return an
+              # empty string.  We want an empty dictionary instead
+              # for our representation of empty.
+              if value is None:
+                value = []
+            except yaml.MarkedYAMLError, e:
+              QtGui.QMessageBox.warning(self, self.tr("Warning"), "yaml error: %s"%str(e), QtGui.QMessageBox.Ok)
           else:
             value = params['value']
           self._on_param_values(self.masteruri, 1, '', {roslib.names.ns_join(params['namespace'], params['name']) : (1, '', value)})
@@ -960,7 +1022,7 @@ class MasterParameterDialog(ParameterDialog):
         if code_n != 1:
           val = ''
         type_str = 'string'
-        value = val
+        value = unicode(val)
         if isinstance(val, bool):
           type_str = 'bool'
         elif isinstance(val, int):
@@ -968,7 +1030,13 @@ class MasterParameterDialog(ParameterDialog):
         elif isinstance(val, float):
           type_str = 'float'
         elif isinstance(val, list) or isinstance(val, dict):
-          value = unicode(val)
+          # handle representation of `rosparam`
+          type_str = '[]'
+          value = ''
+          for v in val:
+            if len(value) > 0:
+              value = value + ', '
+            value = value + unicode(v)
         elif isinstance(val, Binary):
           type_str = 'binary'
         param = p.replace(self.ns, '')
@@ -982,11 +1050,11 @@ class MasterParameterDialog(ParameterDialog):
               group = group[group_name][1]
             else:
               tmp_dict = dict()
-              group[group_name] = (n, tmp_dict)
+              group[group_name] = ('list', tmp_dict)
               group = tmp_dict
-          group[param_name] = (type_str, value)
+          group[param_name] = (type_str, [value])
         else:
-          dia_params[param_name] = (type_str, value)
+          dia_params[param_name] = (type_str, [value])
       try:
         self.content.createFieldFromValue(dia_params)
         self.setInfoActive(False)
