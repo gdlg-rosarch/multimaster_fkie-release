@@ -42,7 +42,10 @@ import rospy
 import roslib.network
 from ros import roslaunch
 import rosgraph.masterapi
+import rosgraph.names
+from rosgraph.rosenv import ROS_NAMESPACE
 
+import std_srvs.srv
 
 from multimaster_msgs_fkie.msg import Capability
 from multimaster_msgs_fkie.srv import ListDescription, ListNodes, LoadLaunch, Task, ListDescriptionResponse, ListNodesResponse
@@ -68,8 +71,23 @@ class DefaultCfg(object):
     self.package = ''
     self.file = ''
     self.__lock = threading.RLock()
+    # Load parameter
+    self.launch_file = rospy.get_param('~launch_file', '')
+    rospy.loginfo("launch_file: %s"%self.launch_file)
+    self.package = rospy.get_param('~package', '')
+    rospy.loginfo("package: %s"%self.package)
+    self.do_autostart = rospy.get_param('~autostart', False)
+    rospy.loginfo("do_autostart: %s"%self.do_autostart)
+    self.argv = rospy.get_param('~argv', [])
+    rospy.loginfo("argv: %s"%self.argv)
+    if not isinstance(self.argv, list):
+      self.argv = ["%s"%self.argv]
+    sys.argv[:] = self.argv
+    if self.do_autostart:
+      rospy.set_param('~autostart', False)
     # initialize the ROS services
 #    rospy.Service('~load', LoadLaunch, self.rosservice_load_launch)
+    self._reload_service = rospy.Service('~reload', std_srvs.srv.Empty, self.rosservice_reload)
     rospy.Service('~description', ListDescription, self.rosservice_description)
     self.runService = None
     '''@ivar: The service will be created on each load of a launch file to
@@ -78,21 +96,16 @@ class DefaultCfg(object):
     '''@ivar: The service will be created on each load of a launch file to
     inform the caller about a new configuration. '''
     self.description_response = ListDescriptionResponse()
-#    self.global_parameter_setted = False
+    # variables to print the pending autostart nodes 
+    self._pending_starts = set()
+    self._pending_starts_last_printed = set()
 
-  
-  def load(self, package, file, argv):
+  def load(self, delay_service_creation=0.):
     '''
     Load the launch file configuration
-    @param package: the package containing the launch file, or empty string to load
-    the given file
-    @type package: C{str}
-    @param file: the launch file or complete path, if the package is empty
-    @type file: C{str}
-    @param argv: the argv needed to load the launch file
-    @type argv: C{str}
     '''
     with self.__lock:
+      self._pending_starts.clear()
       # shutdown the services to inform the caller about a new configuration.
       if not self.runService is None:
         self.runService.shutdown('reload config')
@@ -102,20 +115,25 @@ class DefaultCfg(object):
       self.listService = None
       self.nodes = [] # the name of nodes with namespace
       self.sensors = {} # sensor descriptions
-      self.launch_file = launch_file = self.getPath(file, package)
-      rospy.loginfo("loading launch file: %s", launch_file)
+      launch_path = self.getPath(self.launch_file, self.package)
+      rospy.loginfo("loading launch file: %s", launch_path)
       self.masteruri = self._masteruri_from_ros()
       self.roscfg = roslaunch.ROSLaunchConfig()
       loader = roslaunch.XmlLoader()
-      loader.load(launch_file, self.roscfg, verbose=False, argv=argv)
+      argv = [a for a in sys.argv if not a.startswith('__ns:=')]
+      # remove namespace from sys.argv to avoid load the launchfile info local namespace
+      sys.argv = [a for a in sys.argv if not a.startswith('__ns:=')]
+      # set the global environment to empty namespace
+      os.environ[ROS_NAMESPACE] = rospy.names.SEP
+      loader.load(launch_path, self.roscfg, verbose=False, argv=argv)
       # create the list with node names
       for item in self.roscfg.nodes:
         if item.machine_name and not item.machine_name == 'localhost':
           machine = self.roscfg.machines[item.machine_name]
           if roslib.network.is_local_address(machine.address):
-            self.nodes.append(str(''.join([item.namespace, item.name])))
+            self.nodes.append(roslib.names.ns_join(item.namespace, item.name))
         else:
-          self.nodes.append(str(''.join([item.namespace, item.name])))
+          self.nodes.append(roslib.names.ns_join(item.namespace, item.name))
       # get the robot description
       self.description_response = dr = ListDescriptionResponse()
       dr.robot_name = ''
@@ -155,12 +173,15 @@ class DefaultCfg(object):
                 cap.description = descr_dict['description']
                 cap.nodes = list(descr_dict['nodes'])
                 dr.capabilities.append(cap)
-      # initialize the ROS services
-      self._timed_service_creation()
-      #HACK to let the node_manager to update the view
-#      t = threading.Timer(2.0, self._timed_service_creation)
-#      t.start()
+      # load parameters into the ROS parameter server
       self.loadParams()
+      # initialize the ROS services
+      #HACK to let the node_manager to update the view
+      if delay_service_creation > 0.:
+        t = threading.Timer(delay_service_creation, self._timed_service_creation)
+        t.start()
+      else:
+        self._timed_service_creation()
   #    self.timer = rospy.Timer(rospy.Duration(2), self.timed_service_creation, True)
   #    if self.nodes:
   #      self.runService = rospy.Service('~run', Task, self.rosservice_start_node)
@@ -168,6 +189,13 @@ class DefaultCfg(object):
 #    except:
 #      import traceback
 #      print traceback.format_exc()
+      if self.do_autostart:
+        for n in self.nodes:
+          try:
+            self.runNode(n, self.do_autostart)
+          except Exception as e:
+            rospy.logwarn("Error while start %s: %s", n, e)
+        self.do_autostart = False
 
   def _decode(self, val):
     '''
@@ -293,7 +321,7 @@ class DefaultCfg(object):
         launch_file = paths[0]
     if os.path.isfile(launch_file) and os.path.exists(launch_file):
       return launch_file
-    raise LoadException(str(' '.join(['File', file, 'in package ', package, 'not found'])))
+    raise LoadException('File %s in package [%s] not found!'%(file, package))
 
   def rosservice_list_nodes(self, req):
     '''
@@ -307,10 +335,10 @@ class DefaultCfg(object):
     '''
     self.runNode(req.node)
     return []
-#    except:
-#      import traceback
-#      return TaskResponse(str(traceback.format_exc().splitlines()[-1]))
-#    return TaskResponse('')
+
+  def rosservice_reload(self, req):
+    self.load(2.)
+    return []
 
 #  def rosservice_load_launch(self, req):
 #    '''
@@ -328,7 +356,7 @@ class DefaultCfg(object):
     Returns the current description.
     '''
     return self.description_response
-  
+
   def loadParams(self):
     '''
     Loads all parameter into ROS parameter server.
@@ -339,8 +367,7 @@ class DefaultCfg(object):
 #      rospy.loginfo("register PARAMS:\n%s", '\n'.join(params))
     self._load_parameters(self.masteruri, params, self.roscfg.clear_params)
 
-  
-  def runNode(self, node):
+  def runNode(self, node, autostart=False):
     '''
     Start the node with given name from the currently loaded configuration.
     @param node: the name of the node
@@ -351,24 +378,29 @@ class DefaultCfg(object):
     nodename = os.path.basename(node)
     namespace = os.path.dirname(node).strip('/')
     for item in self.roscfg.nodes:
-      if (item.name == nodename) and (item.namespace.strip('/') == namespace):
+      if (item.name == nodename) and ((item.namespace.strip('/') == namespace) or not namespace):
         n = item
         break
     if n is None:
-      raise StartException(''.join(["Node '", node, "' not found!"]))
-    
+      raise StartException("Node '%s' not found!"%node)
+
+    if autostart and self._get_start_exclude(rospy.names.ns_join(n.namespace, n.name)):
+      # skip autostart
+      rospy.loginfo("%s is in exclude list, skip autostart", n.name)
+      return
+
 #    env = n.env_args
     prefix = n.launch_prefix if not n.launch_prefix is None else ''
-    args = [''.join(['__ns:=', n.namespace]), ''.join(['__name:=', n.name])]
+    args = ['__ns:=%s'%n.namespace, '__name:=%s'%n.name]
     if not (n.cwd is None):
-      args.append(''.join(['__cwd:=', n.cwd]))
-    
+      args.append('__cwd:=%s'%n.cwd)
+
     # add remaps
     for remap in n.remap_args:
-      args.append(''.join([remap[0], ':=', remap[1]]))
+      args.append('%s:=%s'%(remap[0], remap[1]))
 
 #    masteruri = self.masteruri
-    
+
 #    if n.machine_name and not n.machine_name == 'localhost':
 #      machine = self.roscfg.machines[n.machine_name]
       #TODO: env-loader support?
@@ -376,19 +408,7 @@ class DefaultCfg(object):
 #        env[len(env):] = machine.env_args
 
 #    nm.screen().testScreen()
-    try:
-      cmd = roslib.packages.find_node(n.package, n.type)
-    except roslib.packages.ROSPkgException as e:
-      # multiple nodes, invalid package
-      raise StartException(str(e))
-    except Exception as e:
-      raise StartException(str(e))
-    # handle diferent result types str or array of string
-    import types
-    if isinstance(cmd, types.StringTypes):
-      cmd = [cmd]
-    if cmd is None or len(cmd) == 0:
-      raise StartException(' '.join([n.type, 'in package [', n.package, '] not found!']))
+    cmd = self._get_node(n.package, n.type)
     # determine the current working path, Default: the package of the node
     cwd = self.get_ros_home()
     if not (n.cwd is None):
@@ -396,7 +416,18 @@ class DefaultCfg(object):
         cwd = self.get_ros_home()
       elif n.cwd == 'node':
         cwd = os.path.dirname(cmd[0])
-    node_cmd = ['rosrun node_manager_fkie respawn' if n.respawn else '', prefix, cmd[0]]
+    respawn = ['']
+    if n.respawn:
+      respawn = self._get_node('node_manager_fkie', 'respawn')
+      # set the respawn environment variables
+      respawn_params = self._get_respawn_params(rospy.names.ns_join(n.namespace, n.name))
+      if respawn_params['max'] > 0:
+        n.env_args.append(('RESPAWN_MAX', '%d'%respawn_params['max']))
+      if respawn_params['min_runtime'] > 0:
+        n.env_args.append(('RESPAWN_MIN_RUNTIME', '%d'%respawn_params['min_runtime']))
+      if respawn_params['delay'] > 0:
+        n.env_args.append(('RESPAWN_DELAY', '%d'%respawn_params['delay']))
+    node_cmd = [respawn[0], prefix, cmd[0]]
     cmd_args = [ScreenHandler.getSceenCmd(node)]
     cmd_args[len(cmd_args):] = node_cmd
     cmd_args.append(n.args)
@@ -404,17 +435,125 @@ class DefaultCfg(object):
 #    print 'runNode: ', cmd_args
     popen_cmd = shlex.split(str(' '.join(cmd_args)))
     rospy.loginfo("run node '%s as': %s", node, str(' '.join(popen_cmd)))
+    # remove the 'BASH_ENV' and 'ENV' from environment
     new_env = dict(os.environ)
+    try:
+      for k in ['BASH_ENV', 'ENV']:
+        del new_env[k]
+    except:
+      pass
+    # add node environment parameter
     for k, v in n.env_args:
       new_env[k] = v
-    ps = subprocess.Popen(popen_cmd, cwd=cwd, env=new_env)
-    # wait for process to avoid 'defunct' processes
-    thread = threading.Thread(target=ps.wait)
-    thread.setDaemon(True)
-    thread.start()
-#    subprocess.Popen(popen_cmd, cwd=cwd)
+    # set delayed autostart parameter
+    self._run_node(popen_cmd, cwd, new_env, rospy.names.ns_join(n.namespace, n.name), autostart)
     if len(cmd) > 1:
-      raise StartException('Multiple executables are found! The first one was started! Exceutables:\n' + str(cmd))
+      raise StartException('Multiple executables are found! The first one was started! Exceutables:\n%s'%str(cmd))
+
+  def _run_node(self, cmd, cwd, env, node, autostart=False):
+    self._pending_starts.add(node)
+    start_now = True
+    start_delay = self._get_start_delay(node)
+    start_required = self._get_start_required(node)
+    if autostart and start_required:
+      start_now = False
+      # get published topics from ROS master
+      master = rosgraph.masterapi.Master(self.masteruri)
+      for topic, datatype in master.getPublishedTopics(''):
+        if start_required == topic:
+          start_now = True
+          break
+      if not start_now:
+        # Start the timer for waiting for the topic
+        start_timer = threading.Timer(3., self._run_node, args=(cmd, cwd, env, node, autostart))
+        start_timer.start()
+    if start_now and autostart and start_delay > 0:
+      start_now = False
+      # start timer for delayed start
+      start_timer = threading.Timer(start_delay, self._run_node, args=(cmd, cwd, env, node, False))
+      start_timer.start()
+    if start_now:
+      ps = subprocess.Popen(cmd, cwd=cwd, env=env)
+      # wait for process to avoid 'defunct' processes
+      thread = threading.Thread(target=ps.wait)
+      thread.setDaemon(True)
+      thread.start()
+      # remove from pending autostarts
+      try:
+        self._pending_starts.remove(node)
+      except:
+        pass
+    # print the current pending autostarts
+    if self._pending_starts_last_printed != self._pending_starts:
+      self._pending_starts_last_printed.clear()
+      self._pending_starts_last_printed.update(self._pending_starts)
+      rospy.loginfo("Pending autostarts %d: %s", len(self._pending_starts), self._pending_starts)
+
+  def _get_node(self, pkg, file):
+    cmd = None
+    try:
+      cmd = roslib.packages.find_node(pkg, file)
+    except roslib.packages.ROSPkgException as e:
+      # multiple nodes, invalid package
+      raise StartException(str(e))
+    except Exception as e:
+      raise StartException(str(e))
+    # handle different result types str or array of string
+    import types
+    if isinstance(cmd, types.StringTypes):
+      cmd = [cmd]
+    if cmd is None or len(cmd) == 0:
+      raise StartException('%s in package [%s] not found!'%(file, pkg))
+    return cmd
+
+  def _get_start_exclude(self, node):
+    param_name = rospy.names.ns_join(node, 'default_cfg/autostart/exclude')
+    try:
+      return bool(self.roscfg.params[param_name].value)
+    except:
+      pass
+    return False
+
+  def _get_start_delay(self, node):
+    param_name = rospy.names.ns_join(node, 'default_cfg/autostart/delay')
+    try:
+      return float(self.roscfg.params[param_name].value)
+    except:
+      pass
+    return 0.
+
+  def _get_start_required(self, node):
+    param_name = rospy.names.ns_join(node, 'default_cfg/autostart/required/publisher')
+    topic = ''
+    try:
+      topic = self.roscfg.params[param_name].value
+      if rosgraph.names.is_private(topic):
+        rospy.logwarn('Private for autostart required topic `%s` is ignored!'%topic)
+        topic = ''
+      elif not rosgraph.names.is_global(topic):
+        topic = rospy.names.ns_join(rosgraph.names.namespace(node), topic)
+    except:
+      pass
+    return topic
+
+  def _get_respawn_params(self, node):
+    result = { 'max' : 0, 'min_runtime' : 0, 'delay': 0 }
+    respawn_max = rospy.names.ns_join(node, 'respawn/max')
+    respawn_min_runtime = rospy.names.ns_join(node, 'respawn/min_runtime')
+    respawn_delay = rospy.names.ns_join(node, 'respawn/delay')
+    try:
+      result['max'] = int(self.roscfg.params[respawn_max].value)
+    except:
+      pass
+    try:
+      result['min_runtime'] = int(self.roscfg.params[respawn_min_runtime].value)
+    except:
+      pass
+    try:
+      result['delay'] = int(self.roscfg.params[respawn_delay].value)
+    except:
+      pass
+    return result
 
   def get_ros_home(self):
     '''
