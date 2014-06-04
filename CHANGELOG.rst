@@ -2,6 +2,75 @@
 Changelog for package node_manager_fkie
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.3.11 (2014-06-04)
+-------------------
+* node_manager_fkie: replaced the rxconsole and rxgraph by rqt button to start rqt plugins related to selected master
+* node_manager_fkie: added a setting docking window
+* node_manager_fkie: hints on start problems fixed, if no screen is installed
+* node_manager_fkie: added a dock widget and button which shows warning messages
+* node_manager_fkie: select the topics and services of a node while tab change and not while node selection. This reduce the cpu load.
+* node_manager_fkie: fixed detection of local host at start
+* node_manager_fkie: fix the removing of local master at startup
+* node_manager_fkie: added features to launch file view
+  * Search for packages
+  * rename files
+  * copy files
+* node_manager_fkie: do not wait in the discovery loop at shutdown
+* node_manager_fkie: cancel buttons redesined, some titles renamed
+* node_manager_fkie: reduced the displayed namespace of the topics and services in info area
+* node_manager_fkie: added F4 and F3 shortcasts for aditing a configuration and show a screen of a node
+* node_manager_fkie: fixed InteractionNeededError while starting nodes on remote hosts using run dialog.
+* node_manager_fkie: added timestamps to each printed message
+* node_manager_fkie: fix detailed message box. Close using ESC button.
+* node_manager_fkie: reload root path in xml file view, if the current path was deleted
+* node_manager_fkie: fixed include tag of dropped file in xml editor
+* node_manager_fkie: added for each node respawn parameters
+* node_manager_fkie: improve respawn script
+  The new script correctly checks the exit code of the launched
+  process and can limit the number of respawns for faulty
+  nodes.
+* node_manager_fkie: use -T for terminal emulator
+  -T is compatible with more terminal emulators than -title
+* node_manager_fkie: added handling for some of other configuration file types to launch file view
+* Open terminal windows with x-terminal-emulator
+  The /usr/bin/x-terminal-emulator symlink is available on Debian
+  based systems and points to the default terminal emulator on
+  the system. /usr/bin/xterm will be used as fallback.
+* node_manager_fkie: changed side bar selection while start hosts
+* node_manager_fkie: fixed the parameter handling of parameter with list type
+* Contributors: Alexander, Alexander Tiderko, Sammy Pfeiffer, Timo Röhling
+
+0.3.10 (2014-03-31)
+-------------------
+* node_manager_fkie: fixed the activation of the local monitoring. Fixed the cancelation in selection dialog.
+* node_manager_fkie: added an indicator for running roslaunch server
+* node_manager_fkie: fixed layout problems
+* node_manager_fkie: dialog size of `start master_discovery` changed
+* node_manager_fkie: added a side bar with checkitems in start host dialog
+* node_manager_fkie: fixed remove entries in combonox of parameter dialog
+* node_manager_fkie: remove comments in launch file fixed
+* node_manager_fkie: added a check for changed files in parameter value
+* node_manager_fkie: inform about changed files only on activating the main GUI
+* node_manager_fkie: fixed search routine
+* node_manager_fkie: fixed multiple entries in dialog for publishing to a new topic
+* node_manager_fkie: added a context sensitive proposals in XML editor
+* node_manager_fkie: enabled drag&drop action in xmleditor and launch view
+* node_manager_fkie: added a button for quick insertion of launch tags
+* node_manager_fkie: reduced the cpu load of echo dialog
+* node_manager_fkie: added a line limit in echo dialog
+* node_manager_fkie: fixed the processing of jobs after the `cancel` button was pressed
+* node_manager_fkie: added a `reload global parameter` link
+  - select the loaded row in launch dialog after loading the launch file
+  with double click
+* node_manager_fkie: fixed start nodes with ns
+* node_maager_fkie: the launch files are now loaded in a thread, so they don't block
+* node_manager_fkie: fixed duplicate detection of running and synchronized nodes
+* node_manager_fkie: sync dialog extended by a new button to sync topics containing AnyMsg as type
+* node_manager_fkie: cmd line output for registered parameter changed
+* node_manager_fkie: removed project file
+* node_manager_fkie: remember the used path in parameter dialog
+* node_manager_fkie: changed the handling of localhost in machine tag of launchfile
+
 0.3.9 (2013-12-12)
 ------------------
 * node_manager_fkie: set node to warning state, if it not renning propertly because of problems with illegal name

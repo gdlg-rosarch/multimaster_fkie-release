@@ -35,6 +35,7 @@ from python_qt_binding import QtCore, QtGui
 
 import time
 import math
+from datetime import datetime
 
 import roslib
 import roslib.message
@@ -44,7 +45,8 @@ import threading
 import gui_resources
 
 class EchoDialog(QtGui.QDialog):
-  
+
+  MESSAGE_LINE_LIMIT = 128
   MESSAGE_HZ_LIMIT = 10
   MAX_DISPLAY_MSGS = 25
   STATISTIC_QUEUE_LEN = 5000
@@ -59,7 +61,7 @@ class EchoDialog(QtGui.QDialog):
   dialog was closed.
   '''
   
-  msg_signal = QtCore.Signal(str, bool)
+  msg_signal = QtCore.Signal(object, bool)
   '''
   msg_signal is a signal, which is emitted, if a new message was received.
   '''
@@ -74,11 +76,11 @@ class EchoDialog(QtGui.QDialog):
     @raise Exception: if no topic class was found for the given type
     '''
     QtGui.QDialog.__init__(self, parent=parent)
-    masteruri_str = '' if masteruri is None else ''.join([' [', str(masteruri), ']'])
+    masteruri_str = '' if masteruri is None else '[%s]'%masteruri
     self.setObjectName(' - '.join(['EchoDialog', topic, masteruri_str]))
     self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
     self.setWindowFlags(QtCore.Qt.Window)
-    self.setWindowTitle(''.join(['Echo of ' if not show_only_rate else 'Hz of ', topic, masteruri_str]))
+    self.setWindowTitle('%s %s %s'%('Echo --- ' if not show_only_rate else 'Hz --- ', topic, masteruri_str))
     self.resize(728,512)
     self.verticalLayout = QtGui.QVBoxLayout(self)
     self.verticalLayout.setObjectName("verticalLayout")
@@ -95,13 +97,13 @@ class EchoDialog(QtGui.QDialog):
     self.times =[]
 
     self.message_count = 0
-
     self._rate_message = ''
     self._scrapped_msgs = 0
     self._scrapped_msgs_sl = 0
 
     self._last_received_ts = 0
     self.receiving_hz = self.MESSAGE_HZ_LIMIT
+    self.line_limit = self.MESSAGE_LINE_LIMIT
 
     self.field_filter_fn = None
 
@@ -115,12 +117,20 @@ class EchoDialog(QtGui.QDialog):
       self.no_arr_checkbox = no_arr_checkbox = QtGui.QCheckBox('Hide arrays')
       no_arr_checkbox.toggled.connect(self.on_no_arr_checkbox_toggled)
       hLayout.addWidget(no_arr_checkbox)
+      self.combobox_reduce_ch = QtGui.QComboBox(self)
+      self.combobox_reduce_ch.addItems([str(self.MESSAGE_LINE_LIMIT), '0', '80', '256', '1024'])
+      self.combobox_reduce_ch.activated[str].connect(self.combobox_reduce_ch_activated)
+      self.combobox_reduce_ch.setEditable(True)
+      self.combobox_reduce_ch.setToolTip("Set maximum line width. 0 disables the limit.")
+      hLayout.addWidget(self.combobox_reduce_ch)
+#      reduce_ch_label = QtGui.QLabel('ch', self)
+#      hLayout.addWidget(reduce_ch_label)
       # add spacer
       spacerItem = QtGui.QSpacerItem(515, 20, QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Minimum)
       hLayout.addItem(spacerItem)
       # add combobox for displaying frequency of messages
       self.combobox_displ_hz = QtGui.QComboBox(self)
-      self.combobox_displ_hz.addItems([str(self.MESSAGE_HZ_LIMIT), '0.1', '1', '50', '100', '1000'])
+      self.combobox_displ_hz.addItems([str(self.MESSAGE_HZ_LIMIT), '0', '0.1', '1', '50', '100', '1000'])
       self.combobox_displ_hz.activated[str].connect(self.on_combobox_hz_activated)
       self.combobox_displ_hz.setEditable(True)
       hLayout.addWidget(self.combobox_displ_hz)
@@ -128,11 +138,12 @@ class EchoDialog(QtGui.QDialog):
       hLayout.addWidget(displ_hz_label)
       # add combobox for count of displayed messages
       self.combobox_msgs_count = QtGui.QComboBox(self)
-      self.combobox_msgs_count.addItems([str(self.MAX_DISPLAY_MSGS), '50', '100', '1000', '10000'])
+      self.combobox_msgs_count.addItems([str(self.MAX_DISPLAY_MSGS), '0', '50', '100'])
       self.combobox_msgs_count.activated[str].connect(self.on_combobox_count_activated)
       self.combobox_msgs_count.setEditable(True)
+      self.combobox_msgs_count.setToolTip("Set maximum displayed message count. 0 disables the limit.")
       hLayout.addWidget(self.combobox_msgs_count)
-      displ_count_label = QtGui.QLabel('displayed count', self)
+      displ_count_label = QtGui.QLabel('#', self)
       hLayout.addWidget(displ_count_label)
       # add topic control button for unsubscribe and subscribe
       self.topic_control_button = QtGui.QToolButton(self)
@@ -208,6 +219,15 @@ class EchoDialog(QtGui.QDialog):
   def on_no_arr_checkbox_toggled(self, state):
     self.field_filter_fn = self.create_field_filter(self.no_str_checkbox.isChecked(), state)
 
+  def combobox_reduce_ch_activated(self, ch_txt):
+    try:
+      self.line_limit = int(ch_txt)
+    except ValueError:
+      try:
+        self.line_limit = float(ch_txt)
+      except ValueError:
+        self.combobox_reduce_ch.setEditText(str(self.line_limit))
+
   def on_combobox_hz_activated(self, hz_txt):
     try:
       self.receiving_hz = int(hz_txt)
@@ -243,13 +263,13 @@ class EchoDialog(QtGui.QDialog):
       self.topic_control_button.setIcon(QtGui.QIcon(':/icons/deleket_deviantart_play.png'))
 
   def _msg_handle(self, data):
-    self.msg_signal.emit(roslib.message.strify_message(data, field_filter=self.field_filter_fn), (data._connection_header['latching'] != '0'))
+    self.msg_signal.emit(data, (data._connection_header['latching'] != '0'))
 
   def _append_message(self, msg, latched):
     '''
     Adds a label to the dialog's layout and shows the given text.
     @param msg: the text to add to the dialog
-    @type msg: C{str}
+    @type msg: message object
     '''
     current_time = time.time()
     with self.lock:
@@ -261,26 +281,33 @@ class EchoDialog(QtGui.QDialog):
       else:
         self.times.append(current_time - self.msg_tn)
         self.msg_tn = current_time
-
-      #only keep statistics for the last 5000 messages so as not to run out of memory
+      # keep only statistics for the last 5000 messages so as not to run out of memory
       if len(self.times) > self.STATISTIC_QUEUE_LEN:
         self.times.pop(0)
-
     self.message_count += 1
     # skip messages, if they are received often then MESSAGE_HZ_LIMIT 
-    if self._last_received_ts != 0:
+    if self._last_received_ts != 0 and self.receiving_hz != 0:
       if not latched and current_time - self._last_received_ts < 1.0 / self.receiving_hz:
         self._scrapped_msgs += 1
         self._scrapped_msgs_sl += 1
         return 
     self._last_received_ts = current_time
-
     if not self.show_only_rate:
+      # convert message to string and reduce line width to current limit
+      msg = roslib.message.strify_message(msg, field_filter=self.field_filter_fn)
+      if isinstance(msg, tuple):
+        msg = msg[0]
+      if self.line_limit != 0:
+        a = ''
+        for l in msg.splitlines():
+          a = a + (l if len(l)<=self.line_limit else l[0:self.line_limit-3]+'...') + '\n'
+        msg = a
+      # create a notification about scrapped messages
       if self._scrapped_msgs_sl > 0:
         txt = '<pre style="color:red; font-family:Fixedsys,Courier,monospace; padding:10px;">scrapped %s message because of Hz-settings</pre>'%self._scrapped_msgs_sl
         self.display.append(txt)
         self._scrapped_msgs_sl = 0
-      txt = ''.join(['<pre style="background-color:#FFFCCC; font-family:Fixedsys,Courier,monospace; padding:10px;">------------------------------\n\n', msg,'</pre>'])
+      txt = '<pre style="background-color:#FFFCCC; font-family:Fixedsys,Courier; padding:10px;">---------- %s --------------------\n%s</pre>'%(datetime.now().strftime("%d.%m.%Y %H:%M:%S.%f"), msg)
       # set the count of the displayed messages on receiving the first message
       if self._blocks_in_msg is None:
         td = QtGui.QTextDocument(txt)
@@ -294,22 +321,19 @@ class EchoDialog(QtGui.QDialog):
       self.close()
       return
     if self.message_count == self.last_printed_count:
-#      self._rate_message = 'no new messages'
       return
     with self.lock:
       # the code from ROS rostopic
       n = len(self.times)
-      if n == 0:
+      if n < 2:
         return
       mean = sum(self.times) / n
       rate = 1./mean if mean > 0. else 0
-
       #std dev
       std_dev = math.sqrt(sum((x - mean)**2 for x in self.times) /n)
       # min and max
       max_delta = max(self.times)
       min_delta = min(self.times)
-
       self.last_printed_count = self.message_count
       self._rate_message = "average rate: %.3f\tmin: %.3fs   max: %.3fs   std dev: %.5fs   window: %s"%(rate, min_delta, max_delta, std_dev, n+1)
       if self._scrapped_msgs > 0:
@@ -317,10 +341,7 @@ class EchoDialog(QtGui.QDialog):
       self._print_status()
       if self.show_only_rate:
         self.display.append(self._rate_message)
-#        status_label = QtGui.QLabel(self._rate_message, self)
-#        self.contentLayout.addWidget(status_label)
 
   def _print_status(self):
-    status_text = ' '.join([str(self.message_count), 'messages', ', ' if self._rate_message else '', self._rate_message])
-    self.status_label.setText(status_text)
+    self.status_label.setText('%s messages   %s'%(self.message_count, self._rate_message))
 
