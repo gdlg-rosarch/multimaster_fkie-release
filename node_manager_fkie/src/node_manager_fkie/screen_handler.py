@@ -61,7 +61,7 @@ class ScreenHandler(object):
   start of the ROS nodes.
   '''
 
-  LOG_PATH = ''.join([os.environ.get('ROS_LOG_DIR'), os.path.sep]) if os.environ.get('ROS_LOG_DIR') else os.path.join(os.path.expanduser('~'), '.ros/log/')
+  LOG_PATH = os.environ.get('ROS_LOG_DIR') if os.environ.get('ROS_LOG_DIR') else os.path.join(os.path.expanduser('~'), '.ros/log/')
   SCREEN = "/usr/bin/screen"
   SLASH_SEP = '_'
   
@@ -240,7 +240,7 @@ class ScreenHandler(object):
 #    pid, session_name = cls.splitSessionName(screen_name)
     title_opt = ' '.join(['"SCREEN', nodename, 'on', host, '"'])
     if nm.is_local(host):
-      cmd = nm.terminal_cmd([cls.SCREEN, '-x', screen_name], title_opt)
+      cmd = nm.settings().terminal_cmd([cls.SCREEN, '-x', screen_name], title_opt)
       rospy.loginfo("Open screen terminal: %s", cmd)
       ps = subprocess.Popen(shlex.split(cmd))
       # wait for process to avoid 'defunct' processes
@@ -335,7 +335,7 @@ class ScreenHandler(object):
                 nm.starter()._kill_wo(host, int(pid), auto_ok_request, user, pw)
               except:
                 import traceback
-                rospy.logwarn("Error while kill screen (PID: %s) on host '%s': %s", str(pid), str(host), str(traceback.format_exc()))
+                rospy.logwarn("Error while kill screen (PID: %s) on host '%s': %s", str(pid), str(host), traceback.format_exc())
           if nm.is_local(host):
             ps = subprocess.Popen([cls.SCREEN, '-wipe'])
             # wait for process to avoid 'defunct' processes

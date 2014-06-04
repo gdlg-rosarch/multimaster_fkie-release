@@ -34,8 +34,8 @@
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.3.10.0"
-__date__ = "2014-03-31"
+__version__ = "0.3.11" # git describe --tags --dirty --always
+__date__ = "2014-06-04"    # git log -1 --date=iso
 
 import os
 import sys
@@ -52,6 +52,7 @@ import rospy
 #if sys.version_info < PYTHONVER:
 #  print 'For full scope of operation this application requires python version > %s, current: %s' % (str(PYTHONVER), sys.version_info)
 
+from settings import Settings
 from ssh_handler import SSHhandler, AuthenticationRequest
 from screen_handler import ScreenHandler, ScreenSelectionRequest
 from start_handler import StartHandler, StartException, BinarySelectionRequest
@@ -62,49 +63,16 @@ from file_watcher import FileWatcher
 from common import get_ros_home, masteruri_from_ros
 from master_view_proxy import LaunchArgsSelectionRequest
 
-# set the cwd to the package of the node_manager_fkie to support the images
-# in HTML descriptions of the robots and capabilities
-PACKAGE_DIR = ''.join([roslib.packages.get_pkg_dir(PKG_NAME), os.path.sep])
-ROBOTS_DIR = ''.join([PACKAGE_DIR, os.path.sep, 'images', os.path.sep])
-
-CFG_PATH = ''.join(['.node_manager', os.sep])
-'''@ivar: configuration path to store the history.'''
-
-LESS = "/usr/bin/less -fKLnQrSU"
-STARTER_SCRIPT = 'rosrun node_manager_fkie remote_nm.py'
-RESPAWN_SCRIPT = 'rosrun node_manager_fkie respawn'
-'''
-the script used on remote hosts to start new ROS nodes
-'''
-
 HOSTS_CACHE = dict()
-''' 
+'''
 the cache directory to store the results of tests for local hosts.
 @see: L{is_local()}
 '''
 
-HELP_FILE = ''.join([PACKAGE_DIR, os.path.sep, 'README.rst'])
-
-CURRENT_DIALOG_PATH = os.path.expanduser('~')
-
 _lock = threading.RLock()
 
-def terminal_cmd(cmd, title):
-  '''
-  Creates a command string to run with a terminal prefix
-  @param cmd: the list with a command and args
-  @type cmd: [str,..]
-  @param title: the title of the terminal
-  @type title: str
-  @return: command with a terminal prefix
-  @rtype:  str
-  '''
-  if os.path.isfile('/usr/bin/xterm'):
-    return str(' '.join(['/usr/bin/xterm', '-geometry 112x35', '-title', str(title), '-e', ' '.join(cmd)]))
-  elif os.path.isfile('/usr/bin/konsole'):
-    return str(' '.join(['/usr/bin/konsole', '--noclose', '-title', str(title), '-e', ' '.join(cmd)]))
-
 main_form = None
+_settings = None
 _ssh_handler = None
 _screen_handler = None
 _start_handler = None
@@ -113,6 +81,14 @@ _history = None
 _file_watcher = None
 _file_watcher_param = None
 app = None
+
+def settings():
+  '''
+  @return: The global settings
+  @rtype: L{Settings}
+  '''
+  global _settings
+  return _settings
 
 def ssh():
   '''
@@ -133,7 +109,7 @@ def screen():
 
 def starter():
   '''
-  @return: The start handler to handle the start of new ROS nodes on local or 
+  @return: The start handler to handle the start of new ROS nodes on local or
   remote machines.
   @rtype: L{StartHandler}
   '''
@@ -190,7 +166,7 @@ def is_local(hostname):
       if isinstance(HOSTS_CACHE[hostname], threading.Thread):
         return False
       return HOSTS_CACHE[hostname]
-  
+
   try:
     machine_addr = socket.inet_aton(hostname)
     local_addresses = ['localhost'] + roslib.network.get_local_addresses()
@@ -203,9 +179,9 @@ def is_local(hostname):
     # the hostname must be resolved => do it in a thread
     thread = threading.Thread(target=__is_local, args=((hostname,)))
     thread.daemon = True
-    thread.start()
     with _lock:
       HOSTS_CACHE[hostname] = thread
+    thread.start()
   return False
 
 def __is_local(hostname):
@@ -234,7 +210,10 @@ def finish(*arg):
     _ssh_handler.close()
   global _history
   if not _history is None:
-    _history.storeAll()
+    try:
+      _history.storeAll()
+    except Exception as e:
+      print >> sys.stderr, "Error while store history: %s"%e
   global main_form
   import main_window
   if isinstance(main_form, main_window.MainWindow):
@@ -250,8 +229,7 @@ def setTerminalName(name):
   @param name: New name of the terminal
   @type name:  C{str}
   '''
-  sys.stdout.write("".join(["\x1b]2;",name,"\x07"]))
-
+  sys.stdout.write("\x1b]2;%s\x07"%name)
 
 def setProcessName(name):
   '''
@@ -268,20 +246,12 @@ def setProcessName(name):
   except:
     pass
 
-
-def init_cfg_path():
-  global CFG_PATH
-  masteruri = masteruri_from_ros()
-  CFG_PATH = ''.join([get_ros_home(), os.sep, 'node_manager', os.sep])
-  '''
-  Creates and runs the ROS node.
-  '''
-  if not os.path.isdir(CFG_PATH):
-    os.makedirs(CFG_PATH)
-  return masteruri
+def init_settings():
+  global _settings
+  _settings = Settings()
 
 def init_globals(masteruri):
-  # initialize the global handler 
+  # initialize the global handler
   global _ssh_handler
   global _screen_handler
   global _start_handler
@@ -344,7 +314,8 @@ def main(name):
     print >> sys.stderr, "please install 'python_qt_binding' package!!"
     sys.exit(-1)
 
-  masteruri = init_cfg_path()
+  init_settings()
+  masteruri = settings().masteruri()
   parser = init_arg_parser()
   args = rospy.myargv(argv=sys.argv)
   parsed_args = parser.parse_args(args[1:])
@@ -361,8 +332,8 @@ def main(name):
 
   # resize and show the qt window
   if not rospy.is_shutdown():
-    os.chdir(PACKAGE_DIR) # change path to be able to the images of descriptions
-    main_form.resize(1024, 720)
+    os.chdir(settings().PACKAGE_DIR) # change path to be able to the images of descriptions
+#    main_form.resize(1024, 720)
     screen_size = QApplication.desktop().availableGeometry()
     if main_form.size().width() >= screen_size.width() or main_form.size().height() >= screen_size.height()-24:
       main_form.showMaximized()
