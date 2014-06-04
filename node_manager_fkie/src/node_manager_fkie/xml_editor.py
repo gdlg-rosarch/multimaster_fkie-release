@@ -40,6 +40,7 @@ from xml_highlighter import XmlHighlighter
 from yaml_highlighter import YamlHighlighter
 from detailed_msg_box import WarningMessageBox
 
+import node_manager_fkie as nm
 from master_discovery_fkie.common import resolve_url
 from common import package_name
 
@@ -49,10 +50,13 @@ class Editor(QtGui.QTextEdit):
   launch file is detected, this can be open by STRG+(mouse click) in a new
   editor.
   '''
-  
+
   load_request_signal = QtCore.Signal(str)
   ''' @ivar: A signal for request to open a configuration file'''
-  
+
+  SUBSTITUTION_ARGS = ['env', 'optenv', 'find', 'anon', 'arg']
+  CONTEXT_FILE_EXT = ['.launch', '.test', '.xml']
+
   def __init__(self, filename, parent=None):
     self.parent = parent
     QtGui.QTextEdit.__init__(self, parent)
@@ -80,6 +84,8 @@ class Editor(QtGui.QTextEdit):
         self.setText(unicode(file.readAll(), "utf-8"))
 
     self.path = '.'
+    # enables drop events
+    self.setAcceptDrops(True)
 
 #  def __del__(self):
 #    print "********** desctroy:", self.objectName()
@@ -128,8 +134,11 @@ class Editor(QtGui.QTextEdit):
         endIndex = path.find(')', startIndex+1)
         script = path[startIndex+1:endIndex].split()
         if len(script) == 2 and (script[0] == 'find'):
-          pkg = roslib.packages.get_pkg_dir(script[1])
-          return os.path.normpath(''.join([pkg, '/', path[endIndex+1:]]))
+          try:
+            pkg = roslib.packages.get_pkg_dir(script[1])
+            return os.path.normpath(''.join([pkg, '/', path[endIndex+1:]]))
+          except Exception as e:
+            rospy.logwarn(str(e))
     else:
       try:
         return resolve_url(path)
@@ -154,7 +163,6 @@ class Editor(QtGui.QTextEdit):
       if index > -1:
         return index
     try:
-      print path
       return resolve_url(path)
     except:
       pass
@@ -178,12 +186,8 @@ class Editor(QtGui.QTextEdit):
             try:
               path = self.interpretPath(fileName)
               file = QtCore.QFile(path)
-              if file.exists() and (path.endswith('.launch') or
-                                    path.endswith('.yaml') or
-                                    path.endswith('.conf') or
-                                    path.endswith('.cfg') or
-                                    path.endswith('.iface') or
-                                    path.endswith('.sync')):
+              ext = os.path.splitext(path)
+              if file.exists() and ext[1] in nm.Settings().SEARCH_IN_EXT:
                 result.append(path)
             except:
               import traceback
@@ -302,6 +306,14 @@ class Editor(QtGui.QTextEdit):
     if event.key() == QtCore.Qt.Key_Control or event.key() == QtCore.Qt.Key_Shift:
       self.setMouseTracking(False)
       self.viewport().setCursor(QtCore.Qt.IBeamCursor)
+    elif event.modifiers() == QtCore.Qt.ControlModifier and event.key() == QtCore.Qt.Key_Space:
+      ext = os.path.splitext(self.filename)
+      if ext[1] in self.CONTEXT_FILE_EXT:
+        menu = self._create_context_substitution_menu()
+        if menu is None:
+          menu = self._create_context_tag_menu()
+        if menu:
+          menu.exec_(self.mapToGlobal(self.cursorRect().bottomRight()))
     QtGui.QTextEdit.keyReleaseEvent(self, event)
 
   def shiftText(self):
@@ -321,7 +333,7 @@ class Editor(QtGui.QTextEdit):
       block_end = cursor.blockNumber()
       if block_end-block_start == 0:
         # shift one line two spaces to the left
-        if key_mod & QtCore.Qt.ControlModifier:
+        if key_mod & QtCore.Qt.ControlModifier or key_mod & QtCore.Qt.ShiftModifier:
           for s in range(2):
             cursor.movePosition(QtGui.QTextCursor.StartOfLine)
             cursor.movePosition(QtGui.QTextCursor.NextCharacter, QtGui.QTextCursor.KeepAnchor, 1)
@@ -337,7 +349,7 @@ class Editor(QtGui.QTextEdit):
           cursor.insertText('  ')
       else:
         # shift the selected block two spaces to the left
-        if key_mod & QtCore.Qt.ControlModifier:
+        if key_mod & QtCore.Qt.ControlModifier or key_mod & QtCore.Qt.ShiftModifier:
           removed = 0
           for i in reversed(range(start, end)):
             cursor.setPosition(i)
@@ -369,6 +381,160 @@ class Editor(QtGui.QTextEdit):
           cursor.movePosition(QtGui.QTextCursor.NextCharacter, QtGui.QTextCursor.KeepAnchor, end-start+inserted)
       self.setTextCursor(cursor)
       cursor.endEditBlock()
+
+  #############################################################################
+  ########## Drag&Drop                                                   ###### 
+  #############################################################################
+
+  def dragEnterEvent(self, e):
+    if e.mimeData().hasFormat('text/plain'):
+      e.accept()
+    else:
+      e.ignore()
+
+  def dragMoveEvent(self, e):
+    e.accept()
+
+  def dropEvent(self, e):
+    cursor = self.cursorForPosition(e.pos())
+    if not cursor.isNull():
+      text = e.mimeData().text()
+      # the files will be included 
+      if text.startswith('file://'):
+        text = text[7:]
+      if os.path.exists(text) and os.path.isfile(text):
+        # find the package name containing the included file 
+        (package, path) = package_name(os.path.dirname(text))
+        if text.endswith('.launch'):
+          if package:
+            cursor.insertText('<include file="$(find %s)%s" />'%(package, text.replace(path, '')))
+          else:
+            cursor.insertText('<include file="%s" />'%text)
+        else:
+          if package:
+            cursor.insertText('<rosparam file="$(find %s)%s" command="load" />'%(package, text.replace(path, '')))
+          else:
+            cursor.insertText('<rosparam file="%s" command="load" />'%text)
+      else:
+        cursor.insertText(e.mimeData().text())
+    e.accept()
+
+  #############################################################################
+  ########## Ctrl&Space  Context menu                                    ###### 
+  #############################################################################
+
+  def _create_context_tag_menu(self):
+    parent_tag, inblock, attrs = self._get_parent_tag()
+    if not parent_tag:
+      return None
+    menu = QtGui.QMenu(self)
+    menu.triggered.connect(self._context_activated)
+    text = self.toPlainText()
+    pos = self.textCursor().position() - 1
+    try:
+      if not inblock:
+        # create a menu with attributes
+        attributes = sorted(list((set(XmlHighlighter.LAUNCH_ATTR[parent_tag]) - set(attrs))))
+        for attr in attributes:
+          action = menu.addAction(attr.rstrip('='))
+          action.setData('%s"'%attr if text[pos] == ' ' else ' %s"'%attr)
+      else:
+        # create a menu with tags
+        tags = sorted(XmlHighlighter.LAUNCH_CHILDS[parent_tag])
+        if not tags:
+          return None
+        for tag in tags:
+          data = '<%s></%s>'%(tag, tag) if XmlHighlighter.LAUNCH_CHILDS[tag] else '<%s/>'%tag
+          if text[pos] == '<':
+            data = data[1:]
+          action = menu.addAction(tag)
+          action.setData(data)
+    except:
+#      import traceback
+#      print traceback.format_exc()
+      return None
+    return menu
+
+  def _create_context_substitution_menu(self):
+    text = self.toPlainText()
+    pos = self.textCursor().position() - 1
+    try:
+      if text[pos] == '$' or (text[pos] == '(' and text[pos-1] == '$'):
+        menu = QtGui.QMenu(self)
+        menu.triggered.connect(self._context_activated)
+        for arg in self.SUBSTITUTION_ARGS:
+          action = menu.addAction("%s"%arg)
+          action.setData("(%s"%arg if text[pos] == '$' else "%s"%arg)
+        return menu
+    except:
+      pass
+    return None
+
+  def _get_parent_tag(self):
+    text = self.toPlainText()
+    pos = self.textCursor().position() - 1
+    # do not parse, if the menu was requested in a string sequence
+    try:
+      if not (text[pos] in [' ', '<', '>', '"', '\n'] or text[pos+1] in [' ', '<','"', '\n']):
+        return '', False, []
+    except:
+      pass
+    instr = (text[:pos+1].count('"') % 2)
+    # do not parse, if the menu was requested in a string definition
+    if instr:
+      return '', False, []
+    # some parameter definition
+    closed_tags = []
+    current_attr = []
+    tag_reading = True
+    tag = ''
+    attr_reading = False
+    attr = ''
+    closed_gts = False
+    # parse the text from current position to the beginning
+    i = pos
+    while i >= 0:
+      if text[i] == '"':
+        instr = not instr
+      elif not instr:
+        # parse only text which is not in string definitions
+        if text[i] == '=':
+          attr_reading = True
+        elif text[i] in ['<', '/', '>']:
+          if text[i] == '>':
+            closed_gts = True
+            tag = ''
+          elif text[i] == '/' and closed_gts:
+            closed_gts = False
+            closed_tags.append(tag if tag else '/')
+            tag = ''
+          elif text[i] == '<':
+            if closed_tags and (tag == closed_tags[-1] or closed_tags[-1] == '/'):
+              closed_tags.pop()
+              current_attr = []
+              tag = ''
+            elif tag:
+              return tag[::-1], closed_gts, current_attr # reverse the tag
+        # start or end of attribute parsing
+        elif text[i] == ' ':
+          if attr_reading and attr:
+            current_attr.append("%s="%attr[::-1])
+            attr_reading = False
+          attr = ''
+          tag = ''
+          tag_reading = True
+        else:
+          if tag_reading or closed_gts:
+            tag += text[i]
+          if attr_reading:
+            attr += text[i]
+      i -= 1
+    return '', False, []
+
+  def _context_activated(self, arg):
+    cursor = self.textCursor()
+    if not cursor.isNull():
+      cursor.insertText(arg.data())
 
 
 class FindDialog(QtGui.QDialog):
@@ -484,7 +650,7 @@ class XmlEditor(QtGui.QDialog):
     self.searchButton.setShortcut(QtGui.QApplication.translate("XmlEditor", "Ctrl+F", None, QtGui.QApplication.UnicodeUTF8))
     self.searchButton.setToolTip('Open a search dialog (Ctrl+F)')
     self.horizontalLayout.addWidget(self.searchButton)
-    # add the got button
+    # add the goto button
     self.gotoButton = QtGui.QPushButton(self)
     self.gotoButton.setObjectName("gotoButton")
     self.gotoButton.clicked.connect(self.on_shortcut_goto)
@@ -492,6 +658,10 @@ class XmlEditor(QtGui.QDialog):
     self.gotoButton.setShortcut(QtGui.QApplication.translate("XmlEditor", "Ctrl+L", None, QtGui.QApplication.UnicodeUTF8))
     self.gotoButton.setToolTip('Open a goto dialog (Ctrl+L)')
     self.horizontalLayout.addWidget(self.gotoButton)
+    # add a tag button
+    self.tagButton = self._create_tag_button(self)
+    self.horizontalLayout.addWidget(self.tagButton)
+
     # add spacer
     spacerItem = QtGui.QSpacerItem(515, 20, QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Minimum)
     self.horizontalLayout.addItem(spacerItem)
@@ -769,3 +939,131 @@ class XmlEditor(QtGui.QDialog):
     currentLine = str(self.tabWidget.currentWidget().textCursor().blockNumber()+1)
     self.find_dialog.result_label.setText(''.join(["'", self.find_dialog.search_text, "'", ' found at line: ', currentLine, ' in ', "'", currentTabName,"'"]))
 
+  ##############################################################################
+  # LAUNCH TAG insertion 
+  ##############################################################################
+
+  def _create_tag_button(self, parent=None):
+    btn = QtGui.QPushButton(parent)
+    btn.setObjectName("tagButton")
+    btn.setText(QtGui.QApplication.translate("XmlEditor", "Add tag", None, QtGui.QApplication.UnicodeUTF8))
+    btn.setShortcut(QtGui.QApplication.translate("XmlEditor", "Ctrl+T", None, QtGui.QApplication.UnicodeUTF8))
+    btn.setToolTip('Adds a ROS launch tag to launch file (Ctrl+T)')
+    # creates a tag menu
+    tag_menu = QtGui.QMenu(btn)
+    # group tag
+    add_group_tag_action = QtGui.QAction("<group>", self, statusTip="", triggered=self._on_add_group_tag)
+    tag_menu.addAction(add_group_tag_action)
+    # node tag
+    add_node_tag_action = QtGui.QAction("<node>", self, statusTip="", triggered=self._on_add_node_tag)
+    tag_menu.addAction(add_node_tag_action)
+    # node tag with all attributes
+    add_node_tag_all_action = QtGui.QAction("<node all>", self, statusTip="", triggered=self._on_add_node_tag_all)
+    tag_menu.addAction(add_node_tag_all_action)
+    # include tag with all attributes
+    add_include_tag_all_action = QtGui.QAction("<include>", self, statusTip="", triggered=self._on_add_include_tag_all)
+    tag_menu.addAction(add_include_tag_all_action)
+    # remap
+    add_remap_tag_action = QtGui.QAction("<remap>", self, statusTip="", triggered=self._on_add_remap_tag)
+    tag_menu.addAction(add_remap_tag_action)
+    # env tag
+    add_env_tag_action = QtGui.QAction("<env>", self, statusTip="", triggered=self._on_add_env_tag)
+    tag_menu.addAction(add_env_tag_action)
+    # param tag
+    add_param_tag_action = QtGui.QAction("<param>", self, statusTip="", triggered=self._on_add_param_tag)
+    tag_menu.addAction(add_param_tag_action)
+    # param tag with all attributes
+    add_param_tag_all_action = QtGui.QAction("<param all>", self, statusTip="", triggered=self._on_add_param_tag_all)
+    tag_menu.addAction(add_param_tag_all_action)
+    # rosparam tag with all attributes
+    add_rosparam_tag_all_action = QtGui.QAction("<rosparam>", self, statusTip="", triggered=self._on_add_rosparam_tag_all)
+    tag_menu.addAction(add_rosparam_tag_all_action)
+    # arg tag with default definition
+    add_arg_tag_default_action = QtGui.QAction("<arg default>", self, statusTip="", triggered=self._on_add_arg_tag_default)
+    tag_menu.addAction(add_arg_tag_default_action)
+    # arg tag with value definition
+    add_arg_tag_value_action = QtGui.QAction("<arg value>", self, statusTip="", triggered=self._on_add_arg_tag_value)
+    tag_menu.addAction(add_arg_tag_value_action)
+
+    # test tag
+    add_test_tag_action = QtGui.QAction("<test>", self, statusTip="", triggered=self._on_add_test_tag)
+    tag_menu.addAction(add_test_tag_action)
+    # test tag with all attributes
+    add_test_tag_all_action = QtGui.QAction("<test all>", self, statusTip="", triggered=self._on_add_test_tag_all)
+    tag_menu.addAction(add_test_tag_all_action)
+
+
+    btn.setMenu(tag_menu)
+    return btn
+
+  def _insert_text(self, text):
+    cursor = self.tabWidget.currentWidget().textCursor()
+    if not cursor.isNull():
+      col = cursor.columnNumber()
+      spaces = ''.join([' ' for i in range(col)])
+      cursor.insertText(text.replace('\n','\n%s'%spaces))
+      self.tabWidget.currentWidget().setFocus(QtCore.Qt.OtherFocusReason)
+
+  def _on_add_group_tag(self):
+    self._insert_text('<group ns="namespace" clear_params="true|false">\n'
+                      '</group>')
+
+  def _on_add_node_tag(self):
+    self._insert_text('<node name="NAME" pkg="PKG" type="BIN">\n'
+                      '</node>')
+
+  def _on_add_node_tag_all(self):
+    self._insert_text('<node name="NAME" pkg="PKG" type="BIN"\n'
+                      '      args="arg1" machine="machine-name"\n'
+                      '      respawn="true" required="true"\n'
+                      '      ns="foo" clear_params="true|false"\n'
+                      '      output="log|screen" cwd="ROS_HOME|node"\n'
+                      '      launch-prefix="prefix arguments">\n'
+                      '</node>')
+
+  def _on_add_include_tag_all(self):
+    self._insert_text('<include file="$(find pkg-name)/path/filename.xml"\n'
+                      '         ns="foo" clear_params="true|false"\n'
+                      '</include>')
+
+  def _on_add_remap_tag(self):
+    self._insert_text('<remap from="original" to="new"/>')
+
+  def _on_add_env_tag(self):
+    self._insert_text('<env name="variable" value="value"/>')
+
+  def _on_add_param_tag(self):
+    self._insert_text('<param name="namespace/name" value="value" />')
+
+  def _on_add_param_tag_all(self):
+    self._insert_text('<param name="namespace/name" value="value"\n'
+                      '       type="str|int|double|bool"\n'
+                      '       textfile="$(find pkg-name)/path/file.txt"\n'
+                      '       binfile="$(find pkg-name)/path/file"\n'
+                      '       command="$(find pkg-name)/exe \'$(find pkg-name)/arg.txt\'"\n'
+                      '</param>')
+
+  def _on_add_rosparam_tag_all(self):
+    self._insert_text('<rosparam param="param-name"\n'
+                      '       file="$(find pkg-name)/path/foo.yaml"\n'
+                      '       command="load|dump|delete"\n'
+                      '       ns="namespace"\n'
+                      '</rosparam>')
+
+  def _on_add_arg_tag_default(self):
+    self._insert_text('<arg name="foo" default="1" />')
+
+  def _on_add_arg_tag_value(self):
+    self._insert_text('<arg name="foo" value="bar" />')
+
+  def _on_add_test_tag(self):
+    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name"\n'
+                      '</test>')
+
+  def _on_add_test_tag_all(self):
+    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name"\n'
+                      '      args="arg1" time-limit="60.0"\n'
+                      '      ns="foo" clear_params="true|false"\n'
+                      '      cwd="ROS_HOME|node" retry="0"\n'
+                      '      launch-prefix="prefix arguments">\n'
+                      '</test>')
