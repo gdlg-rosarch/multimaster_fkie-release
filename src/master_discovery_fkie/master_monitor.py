@@ -94,6 +94,8 @@ class MasterMonitor(object):
   MAX_PING_SEC = 10.0
   ''' The time to update the node URI, ID or service URI (Default: ``10.0``)'''
 
+  INTERVAL_UPDATE_LAUNCH_URIS = 15.0
+
   def __init__(self, rpcport=11611, do_retry=True):
     '''
     Initialize method. Creates an XML-RPC server on given port and starts this
@@ -121,7 +123,6 @@ class MasterMonitor(object):
       self.__mastername = rospy.get_param('~name')
     self.__mastername = self.getMastername()
     rospy.set_param('/mastername', self.__mastername)
-
 
     self.__master_state = None
     '''the current state of the ROS master'''
@@ -156,14 +157,79 @@ class MasterMonitor(object):
         if not do_retry:
           raise
 
+    self._master = xmlrpclib.ServerProxy(self.getMasteruri())
+    # === UPDATE THE LAUNCH URIS Section ===
+    # subscribe to get parameter updates
+    rospy.loginfo("Subscribe to parameter `/roslaunch/uris`")
+    self.__mycache_param_server = rospy.impl.paramserver.get_param_server_cache()
+    # HACK: use own method to get the updates also for parameters in the subgroup 
+    self.__mycache_param_server.update = self.__update_param
+    # first access, make call to parameter server
+    self._update_launch_uris_lock = threading.RLock()
+    self.__launch_uris = {}
+    code, msg, value = self._master.subscribeParam(self.ros_node_name, rospy.get_node_uri(), '/roslaunch/uris')
+    # the new timer will be created in self._update_launch_uris()
+    self._timer_update_launch_uris = None
+    if code == 1:
+      for k,v in value.items():
+        self.__launch_uris[roslib.names.ns_join('/roslaunch/uris', k)] = v
+    self._update_launch_uris()
+    # === END: UPDATE THE LAUNCH URIS Section ===
+
+  def __update_param(self, key, value):
+    # updates the /roslaunch/uris parameter list
+    with self._update_launch_uris_lock:
+      try:
+        if value:
+          self.__launch_uris[key] = value
+        else:
+          del self.__launch_uris[key]
+      except:
+        pass
+
   def shutdown(self):
     '''
     Shutdown the RPC Server.
     '''
     if hasattr(self, 'rpcServer'):
+      if not self._master is None:
+        rospy.loginfo("Unsubscribe from parameter `/roslaunch/uris`")
+        try:
+          self._master.unsubscribeParam(self.ros_node_name, rospy.get_node_uri(), '/roslaunch/uris')
+        except Exception as e:
+          rospy.logwarn("Error while unsubscribe from `/roslaunch/uris`: %s"%e)
+      rospy.loginfo("shutdown own RPC server")
       self.rpcServer.shutdown()
+      if not self._timer_update_launch_uris is None:
+        self._timer_update_launch_uris.cancel()
       del self.rpcServer.socket
       del self.rpcServer
+      rospy.loginfo("exit")
+
+  def _update_launch_uris(self, params={}):
+    with self._update_launch_uris_lock:
+      if params:
+        self.__launch_uris = params
+      try:
+        socket.setdefaulttimeout(3.0)
+        for key, value in self.__launch_uris.items():
+          try:
+            # contact the launch server
+            launch_server = xmlrpclib.ServerProxy(value)
+            c, m, pid = launch_server.get_pid()
+          except:
+            try:
+              # remove the parameter from parameter server on error
+              master = xmlrpclib.ServerProxy(self.getMasteruri())
+              master.deleteParam(self.ros_node_name, key)
+            except:
+              pass
+      finally:
+        socket.setdefaulttimeout(None)
+        # create the new timer
+        if not rospy.is_shutdown():
+          self._timer_update_launch_uris = threading.Timer(self.INTERVAL_UPDATE_LAUNCH_URIS, self._update_launch_uris)
+          self._timer_update_launch_uris.start()
 
   def _getNodePid(self, nodes):
     '''
@@ -349,7 +415,7 @@ class MasterMonitor(object):
       #'print "  getCurrentState _state_access_lock locked", threading.current_thread()
       return self.__master_state
     #'print "getCurrentState _state_access_lock RET", threading.current_thread()
-    
+
   def updateState(self, clear_cache=False):
     '''
     Gets state from the ROS Master through his RPC interface.
@@ -384,7 +450,9 @@ class MasterMonitor(object):
 #        cputimes2 = os.times()                    ###################
 #        cputime_init2 = cputimes2[0] + cputimes2[1] ###################
         self.__new_master_state = master_state = MasterInfo(self.getMasteruri(), self.getMastername())
-        master = xmlrpclib.ServerProxy(self.getMasteruri())
+        # update master state
+        master = self._master
+        #master = xmlrpclib.ServerProxy(self.getMasteruri())
         # get topic types
         code, message, topicTypes = master.getTopicTypes(self.ros_node_name)
 #        cputimes2 = os.times()                                            ###################
