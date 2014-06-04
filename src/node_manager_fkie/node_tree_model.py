@@ -524,7 +524,7 @@ class GroupItem(QtGui.QStandardItem):
             tooltip = ''.join([tooltip, examples.html_body(unicode(self.descr))])
         except:
           import traceback
-          rospy.logwarn("Error while generate description for a tooltip: %s", str(traceback.format_exc()))
+          rospy.logwarn("Error while generate description for a tooltip: %s", traceback.format_exc())
           tooltip = ''.join([tooltip, '<br>'])
       # get nodes
       nodes = []
@@ -641,15 +641,16 @@ class HostItem(GroupItem):
       self._hostname = str(address)
     GroupItem.__init__(self, name, parent)
     self.id = (unicode(masteruri), unicode(address))
-    if QtCore.QFile.exists(''.join([nm.ROBOTS_DIR, name, '.png'])):
-      self.setIcon(QtGui.QIcon(''.join([nm.ROBOTS_DIR, name, '.png'])))
+    image_file = nm.settings().robot_image_file(name)
+    if QtCore.QFile.exists(image_file):
+      self.setIcon(QtGui.QIcon(image_file))
     else:
       if local:
         self.setIcon(QtGui.QIcon(':/icons/crystal_clear_miscellaneous.png'))
       else:
         self.setIcon(QtGui.QIcon(':/icons/remote.png'))
     self.descr_type = self.descr_name = self.descr = ''
-  
+
   @property
   def hostname(self):
     return self._hostname
@@ -708,7 +709,7 @@ class HostItem(GroupItem):
             tooltip = ''.join([tooltip, examples.html_body(self.descr, input_encoding='utf8')])
         except:
           import traceback
-          rospy.logwarn("Error while generate description for a tooltip: %s", str(traceback.format_exc()))
+          rospy.logwarn("Error while generate description for a tooltip: %s", traceback.format_exc())
           tooltip = ''.join([tooltip, '<br>'])
     tooltip = ''.join([tooltip, '<h3>', str(self._hostname), '</h3>'])
     tooltip = ''.join([tooltip, '<font size="+1"><i>', str(self.id[0]), '</i></font><br>'])
@@ -732,7 +733,7 @@ class HostItem(GroupItem):
         tooltip = ''.join([tooltip, examples.html_body(''.join(['- ', '\n- '.join(capabilities)]), input_encoding='utf8')])
       except:
         import traceback
-        rospy.logwarn("Error while generate description for a tooltip: %s", str(traceback.format_exc()))
+        rospy.logwarn("Error while generate description for a tooltip: %s", traceback.format_exc())
     return ''.join(['<div>', tooltip, '</div>']) if tooltip else ''
   
   def type(self):
@@ -1368,7 +1369,7 @@ class NodeTreeModel(QtGui.QStandardItemModel):
           hostItem.addCapabilities('', capabilities, hostItem.masteruri)
         hostItem.clearUp()
     else:
-      rospy.logwarn("Error on retrieve \'capability group\' parameter from %s: %s", str(masteruri), str(msg))
+      rospy.logwarn("Error on retrieve \'capability group\' parameter from %s: %s", str(masteruri), msg)
 
 
   def set_std_capablilities(self, capabilities):
