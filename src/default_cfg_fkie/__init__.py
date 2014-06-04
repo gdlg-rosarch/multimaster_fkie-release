@@ -78,18 +78,17 @@ def main():
   rospy.init_node(NODE_NAME, log_level=rospy.DEBUG)
   setTerminalName(rospy.get_name())
   setProcessName(rospy.get_name())
-  launch_file = rospy.get_param('~launch_file', '')
-  package = rospy.get_param('~package', '')
-  default_cfg = DefaultCfg()
   try:
-    default_cfg.load(package, launch_file, sys.argv)
+    default_cfg = DefaultCfg()
+    default_cfg.load()
   except:
     # on load error the process will be killed to notify user in node_manager
     # about error
     import traceback
-    print traceback.format_exc()
+    rospy.logwarn("%s", traceback.format_exc())
+    import sys
+    sys.stdout.write(traceback.format_exc())
+    sys.stdout.flush()
     import os, signal
     os.kill(os.getpid(), signal.SIGKILL)
-    import time
-    time.sleep(10)
   rospy.spin()
