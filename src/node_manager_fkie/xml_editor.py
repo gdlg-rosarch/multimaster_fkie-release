@@ -56,6 +56,7 @@ class Editor(QtGui.QTextEdit):
 
   SUBSTITUTION_ARGS = ['env', 'optenv', 'find', 'anon', 'arg']
   CONTEXT_FILE_EXT = ['.launch', '.test', '.xml']
+  YAML_VALIDATION_FILES = ['.yaml', '.iface', '.sync']
 
   def __init__(self, filename, parent=None):
     self.parent = parent
@@ -93,6 +94,8 @@ class Editor(QtGui.QTextEdit):
   def save(self):
     '''
     Saves changes to the file.
+    :return: saved, errors, msg
+    :rtype: bool, bool, str
     '''
     if self.document().isModified() or not QtCore.QFileInfo(self.filename).exists():
       file = QtCore.QFile(self.filename)
@@ -100,11 +103,30 @@ class Editor(QtGui.QTextEdit):
         file.write(self.toPlainText().encode('utf-8'))
         self.document().setModified(False)
         self.file_info = QtCore.QFileInfo(self.filename)
-        return True
+
+        ext = os.path.splitext(self.filename)
+        # validate the xml structure of the launch files
+        if ext[1] in self.CONTEXT_FILE_EXT:
+          imported = False
+          try:
+            from lxml import etree
+            imported = True
+            parser = etree.XMLParser()
+            etree.fromstring(self.toPlainText().encode('utf-8'), parser)
+          except Exception as e:
+            if imported:
+              return True, True, "%s"%e
+        # validate the yaml structure of yaml files
+        elif ext[1] in self.YAML_VALIDATION_FILES:
+          try:
+            import yaml
+            yaml.load(self.toPlainText().encode('utf-8'))
+          except yaml.MarkedYAMLError, e:
+            return True, True, "%s"%e
+        return True, False, ''
       else:
-        QtGui.QMessageBox.critical(self, "Error", "Cannot write XML file")
-        return False
-    return False
+        return False, True, "Cannot write XML file"
+    return False, False, ''
 
   def setCurrentPath(self, path):
     '''
@@ -288,6 +310,8 @@ class Editor(QtGui.QTextEdit):
     '''
     if event.key() == QtCore.Qt.Key_Control or event.key() == QtCore.Qt.Key_Shift:
       self.setMouseTracking(True)
+    if event.modifiers() == QtCore.Qt.ControlModifier and event.key() == QtCore.Qt.Key_7:
+      self.commentText()
     if event.key() != QtCore.Qt.Key_Escape:
       # handle the shifting of the block
       if event.key() == QtCore.Qt.Key_Tab:
@@ -315,6 +339,69 @@ class Editor(QtGui.QTextEdit):
         if menu:
           menu.exec_(self.mapToGlobal(self.cursorRect().bottomRight()))
     QtGui.QTextEdit.keyReleaseEvent(self, event)
+
+  def commentText(self):
+    cursor = self.textCursor()
+    if not cursor.isNull():
+      cursor.beginEditBlock()
+      start = cursor.selectionStart()
+      end = cursor.selectionEnd()
+      cursor.setPosition(start)
+      block_start = cursor.blockNumber()
+      cursor.setPosition(end)
+      block_end = cursor.blockNumber()
+      if block_end-block_start > 0 and end-cursor.block().position() <= 0:
+        # skip the last block, if no characters are selected
+        block_end -= 1
+      cursor.setPosition(start, QtGui.QTextCursor.MoveAnchor)
+      cursor.movePosition(QtGui.QTextCursor.StartOfLine)
+      start = cursor.position()
+      while (cursor.block().blockNumber() < block_end+1):
+        cursor.movePosition(QtGui.QTextCursor.StartOfLine)
+        ext = os.path.splitext(self.filename)
+        # XML comment
+        if ext[1] in self.CONTEXT_FILE_EXT:
+          if cursor.block().length() < 4:
+            cursor.movePosition(QtGui.QTextCursor.NextBlock)
+            continue
+          cursor.movePosition(QtGui.QTextCursor.NextCharacter, QtGui.QTextCursor.KeepAnchor, 4)
+          # only comments breakers at the start of the line are removed 
+          if cursor.selectedText() == '<!--':
+            cursor.insertText('')
+            cursor.movePosition(QtGui.QTextCursor.EndOfLine)
+            cursor.movePosition(QtGui.QTextCursor.PreviousCharacter, QtGui.QTextCursor.KeepAnchor, 3)
+            if cursor.selectedText() == '-->':
+              cursor.insertText('')
+          else:
+            cursor.movePosition(QtGui.QTextCursor.StartOfLine)
+            cursor.movePosition(QtGui.QTextCursor.EndOfLine, QtGui.QTextCursor.KeepAnchor)
+            # only comment out, if no comments are found
+            if cursor.selectedText().find('<!--') < 0 and cursor.selectedText().find('-->') < 0:
+              cursor.movePosition(QtGui.QTextCursor.StartOfLine)
+              cursor.insertText('<!--')
+              cursor.movePosition(QtGui.QTextCursor.EndOfLine)
+              cursor.insertText('-->')
+        else: # other comments
+          if cursor.block().length() < 2:
+            cursor.movePosition(QtGui.QTextCursor.NextBlock)
+            continue
+          cursor.movePosition(QtGui.QTextCursor.NextCharacter, QtGui.QTextCursor.KeepAnchor, 2)
+          # only comments breakers at the start of the line are removed
+          if cursor.selectedText() == '# ':
+            cursor.insertText('')
+          else:
+            cursor.movePosition(QtGui.QTextCursor.StartOfLine)
+            cursor.insertText('# ')
+        cursor.movePosition(QtGui.QTextCursor.NextBlock)
+      # Set our cursor's selection to span all of the involved lines.
+      cursor.endEditBlock()
+      cursor.setPosition(start, QtGui.QTextCursor.MoveAnchor)
+      cursor.movePosition(QtGui.QTextCursor.StartOfBlock, QtGui.QTextCursor.MoveAnchor)
+      while (cursor.block().blockNumber() < block_end):
+        cursor.movePosition(QtGui.QTextCursor.NextBlock, QtGui.QTextCursor.KeepAnchor)
+      cursor.movePosition(QtGui.QTextCursor.EndOfBlock, QtGui.QTextCursor.KeepAnchor)
+      # set the cursor 
+      self.setTextCursor(cursor)
 
   def shiftText(self):
     '''
@@ -614,8 +701,9 @@ class XmlEditor(QtGui.QDialog):
     self.setObjectName(' - '.join(['xmlEditor', str(filenames)]))
     self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
     self.setWindowFlags(QtCore.Qt.Window)
-    self.resize(800,640)
     self.mIcon = QtGui.QIcon(":/icons/crystal_clear_edit_launch.png")
+    self._error_icon = QtGui.QIcon(":/icons/crystal_clear_warning.png")
+    self._empty_icon = QtGui.QIcon()
     self.setWindowIcon(self.mIcon)
     self.setWindowTitle("ROSLaunch Editor");
 #    self.finished.connect(self.closeEvent)
@@ -694,10 +782,31 @@ class XmlEditor(QtGui.QDialog):
       if f:
         self.on_load_request(os.path.normpath(f), search_text)
 
+    self.readSettings()
 #    print "================ create", self.objectName()
 #
 #  def __del__(self):
 #    print "******** destroy", self.objectName()
+  def readSettings(self):
+    if nm.settings().store_geometry:
+      settings = nm.settings().qsettings(nm.settings().CFG_GUI_FILE)
+      settings.beginGroup("editor")
+      maximized = settings.value("maximized", 'false') == 'true'
+      if maximized:
+        self.showMaximized()
+      else:
+        self.resize(settings.value("size", QtCore.QSize(800,640)))
+        self.move(settings.value("pos", QtCore.QPoint(0, 0)))
+      settings.endGroup()
+
+  def storeSetting(self):
+    if nm.settings().store_geometry:
+      settings = nm.settings().qsettings(nm.settings().CFG_GUI_FILE)
+      settings.beginGroup("editor")
+      settings.setValue("size", self.size())
+      settings.setValue("pos", self.pos())
+      settings.setValue("maximized", self.isMaximized())
+      settings.endGroup()
 
   def on_load_request(self, filename, search_text=''):
     '''
@@ -803,6 +912,7 @@ class XmlEditor(QtGui.QDialog):
     else:
       event.accept()
     if event.isAccepted():
+      self.storeSetting()
       self.finished_signal.emit(self.init_filenames)
 
   def on_saveButton_clicked(self):
@@ -810,7 +920,15 @@ class XmlEditor(QtGui.QDialog):
     Saves the current document. This method is called if the C{save button} 
     was clicked.
     '''
-    if self.tabWidget.currentWidget().save():
+    saved, errors, msg = self.tabWidget.currentWidget().save()
+    if errors:
+      QtGui.QMessageBox.critical(self, "Error", msg)
+      self.tabWidget.setTabIcon(self.tabWidget.currentIndex(), self._error_icon)
+      self.tabWidget.setTabToolTip(self.tabWidget.currentIndex(), msg)
+    else:
+      self.tabWidget.setTabIcon(self.tabWidget.currentIndex(), self._empty_icon)
+      self.tabWidget.setTabToolTip(self.tabWidget.currentIndex(), '')
+    if saved:
       self.on_editor_textChanged()
 
   def on_editor_textChanged(self):
@@ -827,7 +945,7 @@ class XmlEditor(QtGui.QDialog):
     Shows the number of the line and column in a label.
     '''
     cursor = self.tabWidget.currentWidget().textCursor()
-    self.pos_label.setText(''.join([str(cursor.blockNumber()+1), ':', str(cursor.columnNumber()+1)]))
+    self.pos_label.setText('%s:%s'%(cursor.blockNumber()+1, cursor.columnNumber()))
 
   def on_shortcut_find(self):
     '''
