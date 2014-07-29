@@ -1,3 +1,30 @@
+## multimaster_fkie (groovy) - 0.3.13-0
+
+The packages in the `multimaster_fkie` repository were released into the `groovy` distro by running `/usr/bin/bloom-release multimaster_fkie --track groovy --rosdistro groovy` on `Tue, 29 Jul 2014 13:42:39 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+- upstream repository: http://github.com/fkie/multimaster_fkie.git
+- release repository: https://github.com/fkie-release/multimaster_fkie-release.git
+- rosdistro version: `0.3.12-0`
+- old version: `0.3.12-0`
+- new version: `0.3.13-0`
+
+Versions of tools used:
+- bloom version: `0.5.11`
+- catkin_pkg version: `0.2.4`
+- rosdep version: `0.10.28`
+- rosdistro version: `0.3.5`
+- vcstools version: `0.1.35`
+
+
 ## multimaster_fkie (groovy) - 0.3.12-0
 
 The packages in the `multimaster_fkie` repository were released into the `groovy` distro by running `/usr/bin/bloom-release multimaster_fkie --track groovy --rosdistro groovy` on `Tue, 08 Jul 2014 13:00:50 -0000`
