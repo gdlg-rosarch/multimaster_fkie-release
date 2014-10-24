@@ -115,18 +115,30 @@ class Editor(QtGui.QTextEdit):
             etree.fromstring(self.toPlainText().encode('utf-8'), parser)
           except Exception as e:
             if imported:
+              self.markLine(e.position[0])
               return True, True, "%s"%e
         # validate the yaml structure of yaml files
         elif ext[1] in self.YAML_VALIDATION_FILES:
           try:
             import yaml
             yaml.load(self.toPlainText().encode('utf-8'))
-          except yaml.MarkedYAMLError, e:
+          except yaml.MarkedYAMLError as e:
             return True, True, "%s"%e
         return True, False, ''
       else:
         return False, True, "Cannot write XML file"
     return False, False, ''
+
+  def markLine(self, no):
+    try:
+      cursor = self.textCursor()
+      cursor.setPosition(0, QtGui.QTextCursor.MoveAnchor)
+      while (cursor.block().blockNumber()+1 < no):
+        cursor.movePosition(QtGui.QTextCursor.NextBlock, QtGui.QTextCursor.MoveAnchor)
+      cursor.movePosition(QtGui.QTextCursor.EndOfBlock, QtGui.QTextCursor.KeepAnchor)
+      self.setTextCursor(cursor)
+    except:
+      pass
 
   def setCurrentPath(self, path):
     '''
@@ -829,9 +841,9 @@ class XmlEditor(QtGui.QDialog):
         editor.setCurrentPath(os.path.basename(filename))
         editor.load_request_signal.connect(self.on_load_request)
         if filename.endswith('.launch'):
-          hl = XmlHighlighter(editor.document())
+          self.hl = XmlHighlighter(editor.document())
         else:
-          hl = YamlHighlighter(editor.document())
+          self.hl = YamlHighlighter(editor.document())
         editor.textChanged.connect(self.on_editor_textChanged)
         editor.cursorPositionChanged.connect(self.on_editor_positionChanged)
         editor.setFocus(QtCore.Qt.OtherFocusReason)
@@ -883,6 +895,9 @@ class XmlEditor(QtGui.QDialog):
 
 #  def hideEvent(self, event):
 #    self.close()
+
+  def reject(self):
+    self.close()
 
   def closeEvent (self, event):
     '''
@@ -1141,7 +1156,7 @@ class XmlEditor(QtGui.QDialog):
 
   def _on_add_include_tag_all(self):
     self._insert_text('<include file="$(find pkg-name)/path/filename.xml"\n'
-                      '         ns="foo" clear_params="true|false"\n'
+                      '         ns="foo" clear_params="true|false">\n'
                       '</include>')
 
   def _on_add_remap_tag(self):
@@ -1158,14 +1173,14 @@ class XmlEditor(QtGui.QDialog):
                       '       type="str|int|double|bool"\n'
                       '       textfile="$(find pkg-name)/path/file.txt"\n'
                       '       binfile="$(find pkg-name)/path/file"\n'
-                      '       command="$(find pkg-name)/exe \'$(find pkg-name)/arg.txt\'"\n'
+                      '       command="$(find pkg-name)/exe \'$(find pkg-name)/arg.txt\'">\n'
                       '</param>')
 
   def _on_add_rosparam_tag_all(self):
     self._insert_text('<rosparam param="param-name"\n'
                       '       file="$(find pkg-name)/path/foo.yaml"\n'
                       '       command="load|dump|delete"\n'
-                      '       ns="namespace"\n'
+                      '       ns="namespace">\n'
                       '</rosparam>')
 
   def _on_add_arg_tag_default(self):
@@ -1175,7 +1190,7 @@ class XmlEditor(QtGui.QDialog):
     self._insert_text('<arg name="foo" value="bar" />')
 
   def _on_add_test_tag(self):
-    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name"\n'
+    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name">\n'
                       '</test>')
 
   def _on_add_test_tag_all(self):
