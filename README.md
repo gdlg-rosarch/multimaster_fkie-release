@@ -1,3 +1,30 @@
+## multimaster_fkie (hydro) - 0.3.14-0
+
+The packages in the `multimaster_fkie` repository were released into the `hydro` distro by running `/usr/bin/bloom-release multimaster_fkie --track hydro --rosdistro hydro` on `Fri, 24 Oct 2014 16:02:29 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+- upstream repository: http://github.com/fkie/multimaster_fkie.git
+- release repository: https://github.com/fkie-release/multimaster_fkie-release.git
+- rosdistro version: `0.3.13-0`
+- old version: `0.3.13-0`
+- new version: `0.3.14-0`
+
+Versions of tools used:
+- bloom version: `0.5.12`
+- catkin_pkg version: `0.2.2`
+- rosdep version: `0.10.27`
+- rosdistro version: `0.3.4`
+- vcstools version: `0.1.35`
+
+
 ## multimaster_fkie (indigo) - 0.3.13-0
 
 The packages in the `multimaster_fkie` repository were released into the `indigo` distro by running `/usr/bin/bloom-release multimaster_fkie --track indigo --rosdistro indigo --new-track` on `Tue, 29 Jul 2014 14:10:31 -0000`
