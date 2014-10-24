@@ -66,7 +66,7 @@ from echo_dialog import EchoDialog
 from parameter_handler import ParameterHandler
 from detailed_msg_box import WarningMessageBox, DetailedError
 from progress_queue import ProgressQueue, ProgressThread, InteractionNeededError
-from common import masteruri_from_ros, get_packages, package_name
+from common import masteruri_from_ros, get_packages, package_name, resolve_paths
 from launch_server_handler import LaunchServerHandler
 
 
@@ -141,7 +141,7 @@ class MasterViewProxy(QtGui.QWidget):
     self.__master_state = None
     self.__master_info = None
     self.__force_update = False
-    self.__configs = dict() # [file name] = LaunchConfig
+    self.__configs = dict() # [file name] : LaunchConfig or tuple(ROS node name, ROS service uri, ROS master URI) : ROS nodes
 #    self.rosconfigs = dict() # [launch file path] = LaunchConfig()
     self.__in_question = [] # stores the changed files, until the user is interacted
 #    self.__uses_confgs = dict() # stores the decisions of the user for used configuration to start of node
@@ -590,6 +590,18 @@ class MasterViewProxy(QtGui.QWidget):
     return self.launchfiles.has_key(path)
 
   @property
+  def default_cfgs(self):
+    '''
+    Returns the copy of the dictionary with default configurations on this host
+    @rtype: C{[str(ROS node name)]}
+    '''
+    result = []
+    for (c, cfg) in self.__configs.items():
+      if isinstance(c, tuple):
+        result.append(c[0])
+    return result
+
+  @property
   def launchfiles(self):
     '''
     Returns the copy of the dictionary with loaded launch files on this host
@@ -724,11 +736,18 @@ class MasterViewProxy(QtGui.QWidget):
           for n in new_nodes:
             if p.startswith(n):
               nodes2start.add(n)
+        # detect changes in the arguments and remap 
+        for n in stored_roscfg.nodes:
+          for new_n in self.__configs[launchfile].Roscfg.nodes:
+            if n.name == new_n.name and n.namespace == new_n.namespace:
+              if n.args != new_n.args or n.remap_args != new_n.remap_args:
+                nodes2start.add(roslib.names.ns_join(n.namespace, n.name))
         # filter out anonymous nodes
         nodes2start = [n for n in nodes2start if not re.search(r"\d{3,6}_\d{10,}", n)]
         # restart nodes
         if nodes2start:
           restart, ok = SelectDialog.getValue('Restart nodes?', "Select nodes to restart <b>@%s</b>:"%self.mastername, nodes2start, False, True, '', self)
+          self.stop_nodes_by_name(restart)
           self.start_nodes_by_name(restart, launchfile, True)
       # set the robot_icon
       if launchfile in self.__robot_icons:
@@ -926,12 +945,12 @@ class MasterViewProxy(QtGui.QWidget):
       for c in items[0].capabilities:
         if not caps.has_key(c.namespace):
           caps[c.namespace] = dict()
-        caps[c.namespace][c.name.decode(sys.getfilesystemencoding())] = { 'type' : c.type, 'images' : c.images, 'description' : c.description.replace("\\n ", "\n").decode(sys.getfilesystemencoding()), 'nodes' : list(c.nodes) }
+        caps[c.namespace][c.name.decode(sys.getfilesystemencoding())] = { 'type' : c.type, 'images' : [resolve_paths(i) for i in c.images], 'description' : resolve_paths(c.description.replace("\\n ", "\n").decode(sys.getfilesystemencoding())), 'nodes' : list(c.nodes) }
       if host_addr is None:
         host_addr = nm.nameres().getHostname(key[1])
       self.node_tree_model.addCapabilities(masteruri, host_addr, key, caps)
       # set host description
-      tooltip = self.node_tree_model.updateHostDescription(masteruri, host_addr, items[0].robot_type, items[0].robot_name.decode(sys.getfilesystemencoding()), items[0].robot_descr.decode(sys.getfilesystemencoding()))
+      tooltip = self.node_tree_model.updateHostDescription(masteruri, host_addr, items[0].robot_type, items[0].robot_name.decode(sys.getfilesystemencoding()), resolve_paths(items[0].robot_descr.decode(sys.getfilesystemencoding())))
       self.host_description_updated.emit(masteruri, host_addr, tooltip)
       self.capabilities_update_signal.emit(masteruri, host_addr, roslib.names.namespace(config_name).rstrip(roslib.names.SEP), items)
 
