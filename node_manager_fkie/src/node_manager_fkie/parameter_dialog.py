@@ -38,7 +38,8 @@ import time
 import threading
 from xmlrpclib import Binary
 
-import roslib
+import roslib.names
+import roslib.msgs
 import rospy
 import node_manager_fkie as nm
 
@@ -84,6 +85,7 @@ class ParameterDescription(object):
     elif isinstance(self._type, list):
       self._type = 'list'
     self._value = value
+    self._value_org = value
     self._widget = widget
     try:
       self._base_type, self._is_array_type, self._array_length = roslib.msgs.parse_type(self._type)
@@ -94,6 +96,12 @@ class ParameterDescription(object):
 
   def __repr__(self):
     return ''.join([self._name, ' [', self._type, ']'])
+
+  def origin_value(self):
+    return self._value_org
+
+  def changed(self):
+    return unicode(self.origin_value()) != unicode(self._value)
 
   def name(self):
     return self._name
@@ -151,7 +159,6 @@ class ParameterDescription(object):
     self.updateValue(result)
 
   def updateValue(self, value):
-    error_str = ''
     try:
       if isinstance(value, (dict, list)):
         self._value = value
@@ -171,7 +178,7 @@ class ParameterDescription(object):
 #            self._value = map(str, value)#[ s.encode(sys.getfilesystemencoding()) for s in value]
             try:
               import yaml
-              self._value = [yaml.load(value)]
+              self._value = yaml.load("[%s]"%value)
               # if there is no YAML, load() will return an
               # empty string.  We want an empty dictionary instead
               # for our representation of empty.
@@ -192,7 +199,7 @@ class ParameterDescription(object):
             else:
               self._value = str2bool(value)
           elif self.isBinaryType():
-            self._value = str(value)
+            self._value = unicode(value)
           elif self.isTimeType():
             if value == 'now':
               self._value = 'now'
@@ -221,7 +228,7 @@ class ParameterDescription(object):
           elif 'bool' in self.baseType():
             self._value = False
           elif self.isBinaryType():
-            self._value = str(value)
+            self._value = unicode(value)
           elif self.isTimeType():
             self._value = {'secs': 0, 'nsecs': 0}
           else:
@@ -239,8 +246,8 @@ class ParameterDescription(object):
       if self.isTimeType() and self._value == 'now':
         # FIX: rostopic does not support 'now' values in sub-headers
         t = time.time()
-        return {'secs': int(t), 'nsecs': int((t-int(t))*1000000)}
-    return self._value
+        return ({'secs': int(t), 'nsecs': int((t-int(t))*1000000)}, self.changed())
+    return (self._value, self.changed())
 
   def removeCachedValue(self, value):
     nm.history().removeParamCache(self.fullName(), value)
@@ -254,6 +261,7 @@ class ParameterDescription(object):
         result.setObjectName(self.name())
         if not isinstance(value, bool):
           value = str2bool(value[0] if isinstance(value, list) else value)
+        self._value_org = value
         result.setChecked(value)
       else:
         result = MyComboBox(parent=parent)
@@ -269,6 +277,7 @@ class ParameterDescription(object):
             items.append(unicode(value) if not isinstance(value, Binary) else '{binary data!!! updates will be ignored!!!}')
           elif self.isTimeType():
             items.append('now')
+        self._value_org = items[0] if items else ''
         result.addItems(items)
     else:
       if self.isArrayType():
@@ -295,11 +304,11 @@ class MainBox(QtGui.QWidget):
   '''
   Groups the parameter without visualization of the group. It is the main widget.
   '''
-  def __init__(self, name, type, collapsible=True, parent=None):
+  def __init__(self, name, param_type, collapsible=True, parent=None):
     QtGui.QWidget.__init__(self, parent)
     self.setObjectName(name)
     self.name = name
-    self.type = type
+    self.type = param_type
     self.params = []
     self.collapsed = False
     self.parameter_description = None
@@ -311,7 +320,7 @@ class MainBox(QtGui.QWidget):
     font = self.name_label.font()
     font.setBold(True)
     self.name_label.setFont(font)
-    self.type_label = QtGui.QLabel(''.join([' (', type, ')']))
+    self.type_label = QtGui.QLabel(''.join([' (', param_type, ')']))
 
     if collapsible:
       self.hide_button = QtGui.QPushButton('-')
@@ -333,7 +342,7 @@ class MainBox(QtGui.QWidget):
     self.param_widget.setLayout(boxLayout)
     vLayout.addWidget(self.param_widget)
     self.setLayout(vLayout)
-    if type in ['std_msgs/Header']:
+    if param_type in ['std_msgs/Header']:
       self.setCollapsed(True)
 
   def setCollapsed(self, value):
@@ -420,9 +429,9 @@ class MainBox(QtGui.QWidget):
               field.setChecked(value)
             elif isinstance(field, QtGui.QLineEdit):
               #avoid ' or " that escapes the string values
-              field.setText(', '.join([str(v) for v in value]) if isinstance(value, list) else str(value))
+              field.setText(', '.join([unicode(v) for v in value]) if isinstance(value, list) else unicode(value))
             elif isinstance(field, QtGui.QComboBox):
-              field.setEditText(', '.join([str(v) for v in value]) if isinstance(value, list) else str(value))
+              field.setEditText(', '.join([unicode(v) for v in value]) if isinstance(value, list) else unicode(value))
     elif isinstance(values, list):
       raise Exception("Setting 'list' values in MainBox or GroupBox not supported!!!")
 
@@ -455,8 +464,8 @@ class MainBox(QtGui.QWidget):
     result = False
     for child in self.param_widget.children():
       if isinstance(child, (MainBox, GroupBox, ArrayBox)):
-        show = not (child.objectName().lower().find(arg.lower()) == -1)
-        show = show or child.filter(arg)
+        show = not arg or child.objectName().lower().find(arg.lower()) != -1
+        show = child.filter(arg) or show
         # hide group, if no parameter are visible
         child.setVisible(show)
         if show:
@@ -465,7 +474,8 @@ class MainBox(QtGui.QWidget):
       elif isinstance(child, (QtGui.QWidget)) and not isinstance(child, (QtGui.QLabel)) and  not isinstance(child, (QtGui.QFrame)):
         label = child.parentWidget().layout().labelForField(child)
         if not label is None:
-          show = not (child.objectName().lower().find(arg.lower()) == -1) or (hasattr(child, 'currentText') and not (child.currentText().lower().find(arg.lower()) == -1))
+          has_text = child.objectName().lower().find(arg.lower()) == -1
+          show = not arg or (not has_text or (hasattr(child, 'currentText') and not has_text))
           # set the parent group visible if it is not visible
           if show and not child.parentWidget().isVisible():
             child.parentWidget().setVisible(show)
@@ -487,8 +497,8 @@ class GroupBox(MainBox):
   Groups the parameter of a dictionary, struct or class using the group box for 
   visualization.
   '''
-  def __init__(self, name, type, parent=None):
-    MainBox.__init__(self, name, type, True, parent)
+  def __init__(self, name, param_type, parent=None):
+    MainBox.__init__(self, name, param_type, True, parent)
     self.setObjectName(name)
 
 
@@ -497,9 +507,9 @@ class ArrayEntry(MainBox):
   '''
   A part of the ArrayBox to represent the elements of a list.
   '''
-  def __init__(self, index, type, parent=None):
+  def __init__(self, index, param_type, parent=None):
 #    QtGui.QFrame.__init__(self, parent)
-    MainBox.__init__(self, ''.join(['#',str(index)]), type, True, parent)
+    MainBox.__init__(self, ''.join(['#',str(index)]), param_type, True, parent)
     self.index = index
     self.setObjectName(''.join(['[', str(index), ']']))
     self.param_widget.setFrameShape(QtGui.QFrame.Box)
@@ -522,8 +532,8 @@ class ArrayBox(MainBox):
   '''
   Groups the parameter of a list.
   '''
-  def __init__(self, name, type, parent=None):
-    MainBox.__init__(self, name, type, True, parent)
+  def __init__(self, name, param_type, parent=None):
+    MainBox.__init__(self, name, param_type, True, parent)
     self._dynamic_value = None
     self._dynamic_widget = None
     self._dynamic_items_count = 0
@@ -818,8 +828,10 @@ class ParameterDialog(QtGui.QDialog):
     if not field is None:
       field.setFocus()
 
-  def getKeywords(self):
+  def getKeywords(self, only_changed=False):
     '''
+    @param only_changed: requests only changed parameter
+    @type only_changed: bool (Default: False)
     @returns: a directory with parameter and value for all entered fields.
     @rtype: C{dict(str(param) : str(value))}
     '''
@@ -830,20 +842,51 @@ class ParameterDialog(QtGui.QDialog):
       w = self.sidebar_frame.layout().itemAt(j).widget()
       if isinstance(w, QtGui.QCheckBox):
         if w.checkState() == QtCore.Qt.Checked:
-          sidebar_list.append(w.text())
-    result = self.content.value()
+          sidebar_list.append((w.text(), True))
+    result_value = self.content.value()
     # add the sidebar results
-    if sidebar_name in result:
+    if sidebar_name in result_value:
       # skip the default value, if elements are selected in the side_bar
-      if len(sidebar_list) == 0 or self.sidebar_default_val != result[sidebar_name]:
-        sidebar_list.append(result[sidebar_name])
-      result[sidebar_name] = list(set(sidebar_list))
+      if len(sidebar_list) == 0 or self.sidebar_default_val != result_value[sidebar_name][0]:
+        sidebar_list.append(result_value[sidebar_name])
+      result_value[sidebar_name] = ([v for v, _ in set(sidebar_list)], True)#_:=changed
+    result = self._remove_unchanged_parameter(result_value, only_changed)
+    return result
+
+  def keywords2params(self, keywords):
+    '''
+    Resolves the dictionary values to ROS parameter names.
+    @param keywords: the result of the getKeywords
+    @result: dictionary of (ROS parameter name : value)
+    '''
+    result = dict()
+    for param, value in keywords.items():
+      if isinstance(value, dict):
+        r = self.keywords2params(value)
+        for p, v in r.items():
+          result[roslib.names.ns_join(param, p)] = v
+      else:
+        result[param] = value
+    return result
+
+  def _remove_unchanged_parameter(self, params, only_changed):
+    result = dict()
+    for param, value in params.items():
+      if isinstance(value, dict):
+        r = self._remove_unchanged_parameter(value, only_changed)
+        if r:
+          result[param] = r
+      elif isinstance(value, tuple):
+        if value[1] or not only_changed:
+          result[param] = value[0]
+      else:
+        print "unknown parameter: should not happens", param, value
     return result
 
   def _save_parameter(self):
     try:
       import yaml
-      (fileName, filter) = QtGui.QFileDialog.getSaveFileName(self,
+      (fileName, _) = QtGui.QFileDialog.getSaveFileName(self,
                                                "Save parameter", 
                                                self.__current_path, 
                                                "YAML files (*.yaml);;All files (*)")
@@ -863,7 +906,7 @@ class ParameterDialog(QtGui.QDialog):
   def _load_parameter(self):
     try:
       import yaml
-      (fileName, filter) = QtGui.QFileDialog.getOpenFileName(self,
+      (fileName, _) = QtGui.QFileDialog.getOpenFileName(self,
                                                    "Load parameter", 
                                                    self.__current_path, 
                                                    "YAML files (*.yaml);;All files (*)")
@@ -887,10 +930,14 @@ class ParameterDialog(QtGui.QDialog):
 
   def accept(self):
     self.setResult(QtGui.QDialog.Accepted)
-    self.hide()
+    self.accepted.emit()
+    if self.isModal():
+      print "modal"
+      self.hide()
 
   def reject(self):
     self.setResult(QtGui.QDialog.Rejected)
+    self.rejected.emit()
     self.hide()
 
   def hideEvent(self, event):
@@ -950,13 +997,15 @@ class MasterParameterDialog(ParameterDialog):
   def accept(self):
     if not self.masteruri is None and not self.is_send:
       try:
-        params = self.getKeywords()
+        params = self.getKeywords(True)
+        params = self.keywords2params(params)
         ros_params = dict()
         for p,v in params.items():
+          rospy.logdebug("updated parameter: %s, %s, %s", p, unicode(v), type(v))
           ros_params[roslib.names.ns_join(self.ns, p)] = v
         if ros_params:
           self.is_send = True
-          self.setText('Send the parameter into server...')
+          self.setText('Sends parameters to the server...')
           self.parameterHandler.deliverParameter(self.masteruri, ros_params)
         else:
           self.close()
@@ -990,7 +1039,7 @@ class MasterParameterDialog(ParameterDialog):
           elif params['type'] == 'list':
             try:
               import yaml
-              value = [yaml.load(params['value'])]
+              value = yaml.load("[%s]"%params['value'])
               # if there is no YAML, load() will return an
               # empty string.  We want an empty dictionary instead
               # for our representation of empty.
@@ -1038,7 +1087,7 @@ class MasterParameterDialog(ParameterDialog):
     '''
     if code == 1:
       dia_params = dict()
-      for p, (code_n, msg_n, val) in params.items():
+      for p, (code_n, _, val) in params.items():#_:=msg_n
         if code_n != 1:
           val = ''
         type_str = 'string'
@@ -1099,7 +1148,7 @@ class MasterParameterDialog(ParameterDialog):
     self.is_delivered = True
     errmsg = ''
     if code == 1:
-      for p, (code_n, msg, val) in params.items():
+      for _, (code_n, msg, _) in params.items():#_:=param, val
         if code_n != 1:
           errmsg = '\n'.join([errmsg, msg])
     else:
@@ -1178,16 +1227,19 @@ class ServiceDialog(ParameterDialog):
       self.service_resp_signal.emit(unicode(req), unicode(e))
 
   @classmethod
-  def _params_from_slots(cls, slots, types):
+  def _params_from_slots(cls, slots, types, values={}):
     result = dict()
     for slot, msg_type in zip(slots, types):
-      base_type, is_array, array_length = roslib.msgs.parse_type(msg_type)
+      base_type, is_array, _ = roslib.msgs.parse_type(msg_type)#_:=array_length
       if base_type in roslib.msgs.PRIMITIVE_TYPES or base_type in ['time', 'duration']:
-        result[slot] = (msg_type, 'now' if base_type in ['time', 'duration'] else '')
+        default_value = 'now' if base_type in ['time', 'duration'] else ''
+        if slot in values and values[slot]:
+          default_value = values[slot]
+        result[slot] = (msg_type, default_value)
       else:
         try:
           list_msg_class = roslib.message.get_message_class(base_type)
-          subresult = cls._params_from_slots(list_msg_class.__slots__, list_msg_class._slot_types)
+          subresult = cls._params_from_slots(list_msg_class.__slots__, list_msg_class._slot_types, values[slot] if slot in values and values[slot] else {})
           result[slot] = (msg_type, [subresult] if is_array else subresult)
         except ValueError, e:
           import traceback
