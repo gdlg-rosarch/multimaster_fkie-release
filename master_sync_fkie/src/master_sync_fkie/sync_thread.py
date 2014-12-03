@@ -31,8 +31,6 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 
-import time
-import math
 import threading
 import xmlrpclib
 import random
@@ -41,7 +39,6 @@ import socket
 import roslib; roslib.load_manifest('master_sync_fkie')
 import roslib.message
 import rospy
-import rosgraph.masterapi
 
 from master_discovery_fkie.common import masteruri_from_ros
 from master_discovery_fkie.filter_interface import FilterInterface
@@ -381,7 +378,7 @@ class SyncThread(object):
           rospy.loginfo("SyncThread[%s] Horrible hack: create and delete publisher to trigger an update for subscribed topics", self.name)
         for (m, t) in hack_pub:
           try:
-            topicPub = rospy.Publisher(m, t)
+            topicPub = rospy.Publisher(m, t, queue_size=1)
             topicPub.unregister()
             del topicPub
           except:
@@ -431,9 +428,9 @@ class SyncThread(object):
     return self._filter.is_ignored_service(node, service)
 
   def _getTopicType(self, topic, topicTypes):
-    for (topicname, type) in topicTypes:
+    for (topicname, topic_type) in topicTypes:
       if (topicname == topic):
-        return type.replace('None', '')
+        return topic_type.replace('None', '')
     return None
 
   def _getNodeUri(self, node, nodes, remote_masteruri):
@@ -445,7 +442,7 @@ class SyncThread(object):
     return None
 
   def _getServiceUri(self, service, nodes, remote_masteruri):
-    for (servicename, uri, masteruri, type, local) in nodes:
+    for (servicename, uri, masteruri, topic_type, local) in nodes:
       if (servicename == service) and ((self._filter.sync_remote_nodes() and masteruri == remote_masteruri) or local == 'local'):
         if  masteruri != self.localMasteruri:
           return uri
