@@ -84,11 +84,11 @@ class SyncHighlighter(QtGui.QSyntaxHighlighter):
 
 
   def highlightBlock(self, text):
-    for pattern, format in self.rules:
+    for pattern, myformat in self.rules:
       index = pattern.indexIn(text)
       while index >= 0:
         length = pattern.matchedLength()
-        self.setFormat(index, length, format)
+        self.setFormat(index, length, myformat)
         index = pattern.indexIn(text, index + length)
 
     self.setCurrentBlockState(0)
@@ -108,6 +108,7 @@ class SyncDialog(QtGui.QDialog):
   def __init__(self, parent=None):
     QtGui.QDialog.__init__(self, parent)
 #    self.host = host
+    self.setWindowIcon(QtGui.QIcon(":/icons/irondevil_sync.png"))
     self.setWindowTitle('Sync')
     self.verticalLayout = QtGui.QVBoxLayout(self)
     self.verticalLayout.setObjectName("verticalLayout")
@@ -191,7 +192,7 @@ class SyncDialog(QtGui.QDialog):
     self.toolButton_CreateInterface.setVisible(False)
 
     self.textedit = Editor('', self)
-    hl = SyncHighlighter(self.textedit.document())
+    self.hl = SyncHighlighter(self.textedit.document())
     sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
     self.textedit.setSizePolicy(sizePolicy)
     self.textedit.setObjectName("syncedit")
@@ -319,17 +320,17 @@ class SyncDialog(QtGui.QDialog):
       try:
         tmp_file = os.path.join(nm.screen().LOG_PATH, 'tmp_sync_interface.sync')
         with open(tmp_file, 'w+') as f: 
-          iface = f.write(self.textedit.toPlainText())
+          f.write(self.textedit.toPlainText())
         from master_discovery_fkie.common import read_interface
         read_interface(tmp_file)
         if not self._new_iface and self._interfaces_files.has_key(self.interface_field.currentText()):
           fileName = self._interfaces_files[self.interface_field.currentText()]
         else:
-          fileName, selectedFilter = QtGui.QFileDialog.getSaveFileName(self, 'Save sync interface', '/home', "Sync Files (*.sync)")
+          fileName, _ = QtGui.QFileDialog.getSaveFileName(self, 'Save sync interface', '/home', "Sync Files (*.sync)")
         if fileName:
           with open(fileName, 'w+') as f: 
             self._interface_filename = fileName
-            iface = f.write(self.textedit.toPlainText())
+            f.write(self.textedit.toPlainText())
             if self._new_iface:
               self.interface_field.clear()
               self._interfaces_files = None
