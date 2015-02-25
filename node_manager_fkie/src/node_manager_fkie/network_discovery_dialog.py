@@ -106,6 +106,7 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
 
   def run(self):
     index = 0
+    self.parent().masterlist_service.refresh(self.parent().getMasteruri(), False)
     while (not rospy.is_shutdown()) and self._running:
       msg = None
       address = None
@@ -130,7 +131,7 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
                     nm.nameres().addInfo(None, address[0], hostname)
                   except:
                     import traceback
-                    print traceback.format_exc()
+                    print traceback.format_exc(1)
                     pass
                 self._hosts[address[0]] = hostname
             if not msg is None:
@@ -142,7 +143,7 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
                 self._discovered[index][address] = (hostname, time.time())
               except Exception, e:
                 import traceback
-                print traceback.format_exc()
+                print traceback.format_exc(1)
                 pass
             if force_update:
               self._updateDisplay()
@@ -151,7 +152,7 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
             break
           except socket.error:
             import traceback
-            rospy.logwarn("socket error: %s", traceback.format_exc())
+            rospy.logwarn("socket error: %s", traceback.format_exc(1))
             break
           except:
             break
@@ -159,6 +160,7 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
       if index >= len(self.sockets):
         index = 0
         self._updateDisplay()
+        self.parent().masterlist_service.refresh(self.parent().getMasteruri(), False)
 
   def closeEvent (self, event):
     self._running = False
@@ -202,4 +204,4 @@ class NetworkDiscoveryDialog(QtGui.QDialog, threading.Thread):
       self.network_join_request.emit(int(url.toString()))
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
