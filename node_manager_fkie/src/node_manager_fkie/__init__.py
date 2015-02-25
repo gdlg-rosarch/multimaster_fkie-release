@@ -34,8 +34,8 @@
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.3.17" # git describe --tags --dirty --always
-__date__ = "2015-01-22"    # git log -1 --date=iso
+__version__ = "0.4.0" # git describe --tags --dirty --always
+__date__ = "2015-02-20"    # git log -1 --date=iso
 
 import os
 import sys
@@ -54,9 +54,9 @@ import roslib.network
 #  print 'For full scope of operation this application requires python version > %s, current: %s' % (str(PYTHONVER), sys.version_info)
 
 from settings import Settings
+from start_handler import StartHandler, StartException, BinarySelectionRequest
 from ssh_handler import SSHhandler, AuthenticationRequest
 from screen_handler import ScreenHandler, ScreenSelectionRequest
-from start_handler import StartHandler, StartException, BinarySelectionRequest
 from progress_queue import InteractionNeededError
 from name_resolution import NameResolution
 from history import History
@@ -284,10 +284,11 @@ def init_arg_parser():
   group = parser.add_argument_group('echo')
   group.add_argument("--echo", nargs=2, help="starts an echo dialog instead of node manager", metavar=('name', 'type'))
   group.add_argument("--hz", action="store_true", help="shows only the Hz value instead of topic content in echo dialog")
+  group.add_argument("--ssh", action="store_true", help="connects via SSH")
 
   return parser
 
-def init_echo_dialog(prog_name, masteruri, topic_name, topic_type, hz=False):
+def init_echo_dialog(prog_name, masteruri, topic_name, topic_type, hz=False, use_ssh=False):
   # start ROS-Master, if not currently running
   StartHandler._prepareROSMaster(masteruri)
   name = ''.join([prog_name, '_echo'])
@@ -295,14 +296,22 @@ def init_echo_dialog(prog_name, masteruri, topic_name, topic_type, hz=False):
   setTerminalName(rospy.get_name())
   setProcessName(rospy.get_name())
   import echo_dialog
-  return echo_dialog.EchoDialog(topic_name, topic_type, hz, masteruri)
+  global _ssh_handler
+  _ssh_handler = SSHhandler()
+  return echo_dialog.EchoDialog(topic_name, topic_type, hz, masteruri, use_ssh=use_ssh)
 
 def init_main_window(prog_name, masteruri, launch_files=[]):
   # start ROS-Master, if not currently running
   StartHandler._prepareROSMaster(masteruri)
-  rospy.init_node(prog_name, anonymous=False, log_level=rospy.DEBUG)
+  rospy.init_node(prog_name, anonymous=False)
   setTerminalName(rospy.get_name())
   setProcessName(rospy.get_name())
+  # setup the loglevel
+  log_level = rospy.get_param('~log_level', "DEBUG")
+  try:
+    rospy.impl.rosout.load_rosout_handlers(getattr(rospy, log_level))
+  except Exception as e:
+    rospy.logwarn("Error while set the log level: %s"%e)
   import main_window
   local_master = init_globals(masteruri)
   return main_window.MainWindow(launch_files, not local_master, launch_files)
@@ -329,10 +338,13 @@ def main(name):
 
   # decide to show main or echo dialog
   global main_form
-  if parsed_args.echo:
-    main_form = init_echo_dialog(name, masteruri, parsed_args.echo[0], parsed_args.echo[1], parsed_args.hz)
-  else:
-    main_form = init_main_window(name, masteruri, parsed_args.file)
+  try:
+    if parsed_args.echo:
+      main_form = init_echo_dialog(name, masteruri, parsed_args.echo[0], parsed_args.echo[1], parsed_args.hz, parsed_args.ssh)
+    else:
+      main_form = init_main_window(name, masteruri, parsed_args.file)
+  except Exception as e:
+    sys.exit("%s"%e)
 
   exit_code = 0
   # resize and show the qt window

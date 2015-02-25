@@ -43,6 +43,7 @@ import xmlrpclib
 
 import node_manager_fkie as nm
 from common import get_ros_home, masteruri_from_ros, package_name#, package_name
+from supervised_popen import SupervisedPopen
 
 
 class StartException(Exception):
@@ -219,11 +220,7 @@ class StartHandler(object):
         new_env['ROS_NAMESPACE'] = n.namespace
       for k, v in env:
         new_env[k] = v
-      ps = subprocess.Popen(shlex.split(str(' '.join(cmd_args))), cwd=cwd, env=new_env)
-      # wait for process to avoid 'defunct' processes
-      thread = threading.Thread(target=ps.wait)
-      thread.setDaemon(True)
-      thread.start()
+      SupervisedPopen(shlex.split(str(' '.join(cmd_args))), cwd=cwd, env=new_env, id="Run node", description="Run node [%s]%s"%(str(n.package), str(n.type)))
     else:
       #'print "RUN REMOTE", node, time.time()
       # start remote
@@ -277,7 +274,11 @@ class StartHandler(object):
         startcmd[len(startcmd):] = args
         rospy.loginfo("Run remote on %s: %s", host, str(' '.join(startcmd)))
         #'print "RUN CALL", node, time.time()
-        output, error, ok = nm.ssh().ssh_exec(host, startcmd, user, pw, auto_pw_request)
+        _, stdout, stderr, ok = nm.ssh().ssh_exec(host, startcmd, user, pw, auto_pw_request, close_stdin=True)
+        output = stdout.read()
+        error = stderr.read()
+        stdout.close()
+        stderr.close()
         #'print "RUN CALLOK", node, time.time()
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.runNode, (node, launch_config, force2host, masteruri, auto_pw_request))
@@ -389,7 +390,9 @@ class StartHandler(object):
         path = os.path.dirname(value) if os.path.isfile(value) else value
         package, package_path = package_name(path)
         if package:
-          output, _, ok = nm.ssh().ssh_exec(host, ['rospack', 'find', package], user, pw, auto_pw_request)
+          _, stdout, _, ok = nm.ssh().ssh_exec(host, ['rospack', 'find', package], user, pw, auto_pw_request, close_stdin=True, close_stderr=True)
+          output = stdout.read()
+          stdout.close()
           if ok:
             if output:
 #              print "  RESOLVED:", output
@@ -475,13 +478,7 @@ class StartHandler(object):
       if not masteruri is None:
         cls._prepareROSMaster(masteruri)
         new_env['ROS_MASTER_URI'] = masteruri
-        ps = subprocess.Popen(shlex.split(cmd_str), env=new_env)
-      else:
-        ps = subprocess.Popen(shlex.split(cmd_str), env=new_env)
-      # wait for process to avoid 'defunct' processes
-      thread = threading.Thread(target=ps.wait)
-      thread.setDaemon(True)
-      thread.start()
+      SupervisedPopen(shlex.split(cmd_str), env=new_env, id="Run without config", description="Run without config [%s]%s"%(str(package), str(binary)))
     else:
       # run on a remote machine
       startcmd = [nm.settings().start_remote_script,
@@ -494,8 +491,12 @@ class StartHandler(object):
         startcmd.append(masteruri)
       rospy.loginfo("Run remote on %s: %s", host, ' '.join(startcmd))
       try:
-        output, error, ok = nm.ssh().ssh_exec(host, startcmd, user, pw, auto_pw_request)
+        _, stdout, stderr, ok = nm.ssh().ssh_exec(host, startcmd, user, pw, auto_pw_request, close_stdin=True)
         if ok:
+          output = stdout.read()
+          error = stderr.read()
+          stdout.close()
+          stderr.close()
           if error:
             rospy.logwarn("ERROR while start '%s': %s", name, error)
             raise StartException(''.join(['The host "', host, '" reports:\n', error]))
@@ -526,7 +527,7 @@ class StartHandler(object):
     except:
 #      socket.setdefaulttimeout(None)
 #      import traceback
-#      print traceback.format_exc()
+#      print traceback.format_exc(1)
       # run a roscore
       from urlparse import urlparse
       master_host = urlparse(masteruri).hostname
@@ -538,7 +539,7 @@ class StartHandler(object):
         cmd_args = '%s roscore --port %d'%(nm.ScreenHandler.getSceenCmd('/roscore--%d'%master_port), master_port)
         print "    %s"%cmd_args
         try:
-          subprocess.Popen(shlex.split(cmd_args), env=new_env)
+          SupervisedPopen(shlex.split(cmd_args), env=new_env, id="ROSCORE", description="Start roscore")
           # wait for roscore to avoid connection problems while init_node
           result = -1
           count = 1
@@ -675,8 +676,10 @@ class StartHandler(object):
       request = '[]' if len(nodes) != 1 else nodes[0]
       try:
         socket.setdefaulttimeout(3)
-        output, error, ok = nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--ros_log_path', request], user, pw, auto_pw_request)
+        _, stdout, _, ok = nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--ros_log_path', request], user, pw, auto_pw_request, close_stdin=True, close_stderr=True)
         if ok:
+          output = stdout.read()
+          stdout.close()
           return output
         else:
           raise StartException(str(''.join(['Get log path from "', host, '" failed:\n', error])))
@@ -707,11 +710,7 @@ class StartHandler(object):
       if os.path.isfile(screenLog):
         cmd = nm.settings().terminal_cmd([nm.settings().log_viewer, screenLog], title_opt)
         rospy.loginfo("open log: %s", cmd)
-        ps = subprocess.Popen(shlex.split(cmd))
-        # wait for process to avoid 'defunct' processes
-        thread = threading.Thread(target=ps.wait)
-        thread.setDaemon(True)
-        thread.start()
+        SupervisedPopen(shlex.split(cmd), id="Open log", description="Open log for '%s' on '%s'"%(str(nodename), str(host)))
         found = True
       #open roslog file
       roslog = nm.screen().getROSLogFile(nodename)
@@ -719,24 +718,12 @@ class StartHandler(object):
         title_opt = title_opt.replace('LOG', 'ROSLOG')
         cmd = nm.settings().terminal_cmd([nm.settings().log_viewer, roslog], title_opt)
         rospy.loginfo("open ROS log: %s", cmd)
-        ps = subprocess.Popen(shlex.split(cmd))
-        # wait for process to avoid 'defunct' processes
-        thread = threading.Thread(target=ps.wait)
-        thread.setDaemon(True)
-        thread.start()
+        SupervisedPopen(shlex.split(cmd), id="Open log", description="Open log for '%s' on '%s'"%(str(nodename), str(host)))
         found = True
       return found
     else:
       ps = nm.ssh().ssh_x11_exec(host, [nm.settings().start_remote_script, '--show_screen_log', nodename], title_opt, user)
-      # wait for process to avoid 'defunct' processes
-      thread = threading.Thread(target=ps.wait)
-      thread.setDaemon(True)
-      thread.start()
       ps = nm.ssh().ssh_x11_exec(host, [nm.settings().start_remote_script, '--show_ros_log', nodename], title_opt.replace('LOG', 'ROSLOG'), user)
-      # wait for process to avoid 'defunct' processes
-      thread = threading.Thread(target=ps.wait)
-      thread.setDaemon(True)
-      thread.start()
     return False
 
 
@@ -765,7 +752,7 @@ class StartHandler(object):
     else:
       try:
         #output ignored: output, error, ok 
-        nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--delete_logs', nodename], user, pw, auto_pw_request)
+        nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--delete_logs', nodename], user, pw, auto_pw_request, close_stdin=True, close_stdout=True, close_stderr=True)
       except nm.AuthenticationRequest as e:
         raise nm.InteractionNeededError(e, cls.deleteLog, (nodename, host, auto_pw_request))
 
@@ -793,8 +780,12 @@ class StartHandler(object):
     else:
       # kill on a remote machine
       cmd = ['kill -9', str(pid)]
-      output, error, ok = nm.ssh().ssh_exec(host, cmd, user, pw, False)
+      _, stdout, stderr, ok = nm.ssh().ssh_exec(host, cmd, user, pw, False, close_stdin=True)
       if ok:
+        output = stdout.read()
+        error = stderr.read()
+        stdout.close()
+        stderr.close()
         if error:
           rospy.logwarn("ERROR while kill %s: %s", str(pid), error)
           raise StartException(str(''.join(['The host "', host, '" reports:\n', error])))
@@ -824,8 +815,12 @@ class StartHandler(object):
         else:
           if not CACHED_PKG_PATH.has_key(host):
             CACHED_PKG_PATH[host] = dict()
-          output, error, ok = nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--package', pkg_name], user, pw, auto_pw_request)
+          _, stdout, stderr, ok = nm.ssh().ssh_exec(host, [nm.settings().start_remote_script, '--package', pkg_name], user, pw, auto_pw_request, close_stdin=True)
         if ok:
+          output = stdout.read()
+          error = stderr.read()
+          stdout.close()
+          stderr.close()
           if error:
             rospy.logwarn("ERROR while transfer %s to %s: %s", path, host, error)
             raise StartException(str(''.join(['The host "', host, '" reports:\n', error])))
