@@ -53,6 +53,8 @@ class SyncThread(object):
 
   MAX_UPDATE_DELAY = 5 # times
 
+  MSG_ANY_TYPE = '*'
+
   def __init__(self, name, uri, discoverer_name, monitoruri, timestamp, sync_on_demand=False):
     '''
     Initialization method for the SyncThread. 
@@ -286,9 +288,11 @@ class SyncThread(object):
           topictype = self._getTopicType(topic, topicTypes)
           nodeuri = self._getNodeUri(node, nodeProviders, remote_masteruri)
           # if remote topictype is None, try to set to the local topic type
-          if not topictype and not self.__own_state is None:
-            if topic in self.__own_state.topics:
-              topictype = self.__own_state.topics[topic].type
+#          if not topictype and not self.__own_state is None:
+#            if topic in self.__own_state.topics:
+#              topictype = self.__own_state.topics[topic].type
+          if not topictype:
+            topictype = self.MSG_ANY_TYPE
           if topictype and nodeuri and not self._doIgnoreNT(node, topic, topictype):
             # register the node as subscriber in local ROS master
             if not ((topic, node, nodeuri) in self.__subscriber):
@@ -343,26 +347,26 @@ class SyncThread(object):
               if code == -1:
                 rospy.logwarn("SyncThread[%s] topic subscription error: %s (%s), %s %s, node: %s", self.name, h[1], h[2], str(code), str(statusMessage), h[3])
               else:
-                rospy.loginfo("SyncThread[%s] topic subscribed: %s, %s %s, node: %s", self.name, h[1], str(code), str(statusMessage), h[3])
+                rospy.logdebug("SyncThread[%s] topic subscribed: %s, %s %s, node: %s", self.name, h[1], str(code), str(statusMessage), h[3])
             if h[0] == 'sub' and code == 1 and len(r) > 0:
               # Horrible hack: see line 372
-              hack_pub.add((h[1], roslib.message.get_message_class(h[2])))
+              hack_pub.add(h[1])
             elif h[0] == 'pub':
               if code == -1:
                 rospy.logwarn("SyncThread[%s] topic advertise error: %s (%s), %s %s", self.name, h[1], h[2], str(code), str(statusMessage))
               else:
-                rospy.loginfo("SyncThread[%s] topic advertised: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
+                rospy.logdebug("SyncThread[%s] topic advertised: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
             elif h[0] == 'usub':
-              rospy.loginfo("SyncThread[%s] topic unsubscribed: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
+              rospy.logdebug("SyncThread[%s] topic unsubscribed: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
             elif h[0] == 'upub':
-              rospy.loginfo("SyncThread[%s] topic unadvertised: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
+              rospy.logdebug("SyncThread[%s] topic unadvertised: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
             elif h[0] == 'srv':
               if code == -1:
                 rospy.logwarn("SyncThread[%s] service registration error: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
               else:
-                rospy.loginfo("SyncThread[%s] service registered: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
+                rospy.logdebug("SyncThread[%s] service registered: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
             elif h[0] == 'usrv':
-              rospy.loginfo("SyncThread[%s] service unregistered: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
+              rospy.logdebug("SyncThread[%s] service unregistered: %s, %s %s", self.name, h[1], str(code), str(statusMessage))
           except:
             import traceback
             rospy.logerr("SyncThread[%s] ERROR while analyzing the results of the registration call [%s]: %s", self.name, h[1], traceback.format_exc())
@@ -375,10 +379,10 @@ class SyncThread(object):
         # way.
         # We create publisher locally as a hack, to get callback set up properly for already registered local publishers
         if hack_pub:
-          rospy.loginfo("SyncThread[%s] Horrible hack: create and delete publisher to trigger an update for subscribed topics", self.name)
-        for (m, t) in hack_pub:
+          rospy.loginfo("SyncThread[%s] Horrible hack: create and delete publisher to trigger an update for subscribed topics: %s", self.name, hack_pub)
+        for m in hack_pub:
           try:
-            topicPub = rospy.Publisher(m, t, queue_size=1)
+            topicPub = rospy.Publisher(m, rospy.msg.AnyMsg, queue_size=1)
             topicPub.unregister()
             del topicPub
           except:

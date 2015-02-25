@@ -68,6 +68,7 @@ from detailed_msg_box import WarningMessageBox, DetailedError
 from progress_queue import ProgressQueue, InteractionNeededError #, ProgressThread
 from common import masteruri_from_ros, get_packages, package_name, resolve_paths
 from launch_server_handler import LaunchServerHandler
+from supervised_popen import SupervisedPopen
 
 
 
@@ -154,7 +155,7 @@ class MasterViewProxy(QtGui.QWidget):
     self.__last_info_type = None # {Node, Topic, Service}
     self.__last_info_text = None
     self.__use_sim_time = False
-    self.__current_user = nm.settings().default_user
+    self.__current_user = nm.settings().host_user(self.mastername)
     self.__robot_icons = []
     self.__current_robot_icon = None
     self.__current_parameter_robot_icon = ''
@@ -263,6 +264,7 @@ class MasterViewProxy(QtGui.QWidget):
 
     self.masterTab.echoTopicButton.clicked.connect(self.on_topic_echo_clicked)
     self.masterTab.hzTopicButton.clicked.connect(self.on_topic_hz_clicked)
+    self.masterTab.hzSshTopicButton.clicked.connect(self.on_topic_hz_ssh_clicked)
     self.masterTab.pubTopicButton.clicked.connect(self.on_topic_pub_clicked)
     self.masterTab.pubStopTopicButton.clicked.connect(self.on_topic_pub_stop_clicked)
 
@@ -354,6 +356,7 @@ class MasterViewProxy(QtGui.QWidget):
   @current_user.setter
   def current_user(self, user):
     self.__current_user = user
+    nm.settings().set_host_user(self.mastername, user)
 
   @property
   def is_local(self):
@@ -429,11 +432,14 @@ class MasterViewProxy(QtGui.QWidget):
 #      print "  update on ", self.__master_info.mastername if not self.__master_info is None else self.__master_state.name, cputime
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
 
   @property
   def use_sim_time(self):
     return self.__use_sim_time
+
+  def in_process(self):
+    return self._progress_queue.count() > 0
 
   def force_next_update(self):
     self.__force_update = True
@@ -636,7 +642,7 @@ class MasterViewProxy(QtGui.QWidget):
 #      WarningMessageBox(QtGui.QMessageBox.Warning, "Loading launch file", err_text, err_details).exec_()
     except:
       import traceback
-      print traceback.print_exc()
+      print traceback.format_exc(1)
 
   def _apply_launch_config(self, launchfile, launchConfig):
 #    QtCore.QCoreApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
@@ -671,7 +677,7 @@ class MasterViewProxy(QtGui.QWidget):
           self.host_description_updated.emit(self.masteruri, host_addr, tooltip)
       except:
         import traceback
-        print traceback.print_exc()
+        print traceback.format_exc(1)
 
       # by this call the name of the host will be updated if a new one is defined in the launch file
       self.updateRunningNodesInModel(self.__master_info)
@@ -744,7 +750,7 @@ class MasterViewProxy(QtGui.QWidget):
       WarningMessageBox(QtGui.QMessageBox.Warning, "Loading launch file", err_text, err_details).exec_()
     except:
       import traceback
-      print traceback.print_exc()
+      print traceback.format_exc(1)
     self.update_robot_icon(True)
 
   def reload_global_parameter_at_next_start(self, launchfile):
@@ -772,7 +778,7 @@ class MasterViewProxy(QtGui.QWidget):
                   result.append(item.name)
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
     return result
 
   def _expand_groups(self, groups=None):
@@ -794,7 +800,7 @@ class MasterViewProxy(QtGui.QWidget):
                     self.masterTab.nodeTreeView.setExpanded(index_cap, True)
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
 
   def update_robot_icon(self, force=False):
     '''
@@ -1306,6 +1312,7 @@ class MasterViewProxy(QtGui.QWidget):
       topics_selected = (len(selectedTopics) > 0)
       self.masterTab.echoTopicButton.setEnabled(topics_selected)
       self.masterTab.hzTopicButton.setEnabled(topics_selected)
+      self.masterTab.hzSshTopicButton.setEnabled(topics_selected)
       self.masterTab.pubStopTopicButton.setEnabled(topics_selected)
     if len(selectedTopics) == 1:
       topic = selectedTopics[0]
@@ -1313,6 +1320,7 @@ class MasterViewProxy(QtGui.QWidget):
       text = '<font size="+1"><b><span style="color:gray;">%s%s</span><b>%s</b></font><br>'%(ns, sep, name)
       text += '<a href="topicecho://%s%s">echo</a>'%(self.mastername, topic.name)
       text += '- <a href="topichz://%s%s">hz</a>'%(self.mastername, topic.name)
+      text += '- <a href="topichzssh://%s%s">sshhz</a>'%(self.mastername, topic.name)
       text += '- <a href="topicpub://%s%s">pub</a>'%(self.mastername, topic.name)
       if topic.name in self.__republish_params:
         text += '- <a href="topicrepub://%s%s">repub</a>'%(self.mastername, topic.name)
@@ -1544,7 +1552,7 @@ class MasterViewProxy(QtGui.QWidget):
         except (Exception, nm.StartException) as e:
           print type(e)
           import traceback
-          print traceback.format_exc()
+          print traceback.format_exc(3)
           rospy.logwarn("Error while start '%s': %s"%(node.name, e))
           raise DetailedError("Start error", 'Error while start %s'%node.name, '%s'%e)
       elif isinstance(config, (str, unicode)):
@@ -1728,7 +1736,7 @@ class MasterViewProxy(QtGui.QWidget):
         #'print "STOP stop finished", node
       except Exception, e:
 #            import traceback
-#            formatted_lines = traceback.format_exc().splitlines()
+#            formatted_lines = traceback.format_exc(1).splitlines()
         rospy.logwarn("Error while stop node '%s': %s", str(node.name), str(e))
         if str(e).find(' 111') == 1:
 #          self.masterTab.stopButton.setEnabled(False)
@@ -1737,7 +1745,7 @@ class MasterViewProxy(QtGui.QWidget):
                               str(e))
       finally:
         socket.setdefaulttimeout(None)
-    elif not node is None and node.is_ghost:
+    elif isinstance(node, NodeItem) and node.is_ghost:
       #since for ghost nodes no info is available, emit a signal to handle the
       # stop message in other master_view_proxy
       self.stop_nodes_signal.emit(node.masteruri, [node.name])
@@ -1751,9 +1759,9 @@ class MasterViewProxy(QtGui.QWidget):
     '''
     # put into the queue and start the que handling
     for node in nodes:
-      self._progress_queue.add2queue(str(uuid.uuid4()), 
-                                     ''.join(['stop ', node.name]), 
-                                     self.stop_node, 
+      self._progress_queue.add2queue(str(uuid.uuid4()),
+                                     'stop %s'%node.name,
+                                     self.stop_node,
                                      (node, (len(nodes)==1)))
     self._progress_queue.start()
 
@@ -1851,15 +1859,16 @@ class MasterViewProxy(QtGui.QWidget):
       finally:
         socket.setdefaulttimeout(None)
     return True
-    
+
   def on_unregister_nodes(self):
     selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
     # put into the queue and start the que handling
     for node in selectedNodes:
-      self._progress_queue.add2queue(str(uuid.uuid4()), 
-                                     ''.join(['unregister node ', node.name]), 
-                                     self.unregister_node, 
-                                     (node, (len(selectedNodes)==1)))
+      if node.pid is None or len(selectedNodes) == 1:
+        self._progress_queue.add2queue(str(uuid.uuid4()), 
+                                       ''.join(['unregister node ', node.name]), 
+                                       self.unregister_node, 
+                                       (node, (len(selectedNodes)==1)))
     self._progress_queue.start()
 
   def on_stop_context_toggled(self, state):
@@ -1991,7 +2000,7 @@ class MasterViewProxy(QtGui.QWidget):
           self._progress_queue.start()
     except Exception, e:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
       rospy.logwarn("Error while show log: %s", str(e))
       WarningMessageBox(QtGui.QMessageBox.Warning, "Show log error", 
                         'Error while show Log',
@@ -2064,16 +2073,12 @@ class MasterViewProxy(QtGui.QWidget):
             import subprocess
             env = dict(os.environ)
             env["ROS_MASTER_URI"] = str(self.master_info.masteruri)
-            rospy.loginfo("Start dynamic reconfiguration for '%s'", str(node))
-            ps = subprocess.Popen(['rosrun', 'node_manager_fkie', 'dynamic_reconfigure', node, '__ns:=dynamic_reconfigure'], env=env)
-            # wait for process to avoid 'defunct' processes
-            thread = threading.Thread(target=ps.wait)
-            thread.setDaemon(True)
-            thread.start()
+            rospy.loginfo("Start dynamic reconfiguration for '%s'"%node)
+            ps = SupervisedPopen(['rosrun', 'node_manager_fkie', 'dynamic_reconfigure', node, '__ns:=dynamic_reconfigure'], env=env, id=node, description='Start dynamic reconfiguration for %s failed'%node)
         except Exception, e:
-          rospy.logwarn("Start dynamic reconfiguration for '%s' failed: %s", str(n.name), str(e))
+          rospy.logwarn("Start dynamic reconfiguration for '%s' failed: %s"%(n.name, e))
           WarningMessageBox(QtGui.QMessageBox.Warning, "Start dynamic reconfiguration error", 
-                            ''.join(['Start dynamic reconfiguration for ', str(n.name), ' failed!']),
+                            'Start dynamic reconfiguration for %s failed!'%n.name,
                             str(e)).exec_()
 
   def on_edit_config_clicked(self):
@@ -2106,7 +2111,7 @@ class MasterViewProxy(QtGui.QWidget):
         inputDia.show()
       except:
         import traceback
-        rospy.logwarn("Error on retrieve parameter for %s: %s", str(node.name), traceback.format_exc())
+        rospy.logwarn("Error on retrieve parameter for %s: %s", str(node.name), traceback.format_exc(1))
 
   def on_save_clicked(self):
     (fileName, _) = QtGui.QFileDialog.getSaveFileName(self,
@@ -2174,7 +2179,7 @@ class MasterViewProxy(QtGui.QWidget):
       del self.__configs[cfg]
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
       pass
 
   def on_topic_echo_clicked(self):
@@ -2188,6 +2193,12 @@ class MasterViewProxy(QtGui.QWidget):
     Shows the hz of the topic in a terminal.
     '''
     self._show_topic_output(True)
+
+  def on_topic_hz_ssh_clicked(self):
+    '''
+    Shows the hz of the topic using ssh.
+    '''
+    self._show_topic_output(True, use_ssh=True)
 
   def on_topic_pub_clicked(self):
     selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
@@ -2225,7 +2236,7 @@ class MasterViewProxy(QtGui.QWidget):
               self._start_publisher(params['Name'], params['Type'])
             except Exception, e:
               import traceback
-              print traceback.format_exc()
+              print traceback.format_exc(1)
               rospy.logwarn("Publish topic '%s' failed: %s", str(params['Name']), str(e))
               WarningMessageBox(QtGui.QMessageBox.Warning, "Publish topic error", 
                                 ''.join(['Publish topic ', params['Name'], ' failed!']),
@@ -2316,7 +2327,7 @@ class MasterViewProxy(QtGui.QWidget):
                         ''.join(['Publish topic ', topic_name, ' failed!']),
                         str(e)).exec_()
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
       return False
 
   def _rem_empty_lists(self, param_dict):
@@ -2345,7 +2356,7 @@ class MasterViewProxy(QtGui.QWidget):
             nodes2stop.append(n)
       self.stop_nodes_by_name(nodes2stop)
 
-  def _show_topic_output(self, show_hz_only):
+  def _show_topic_output(self, show_hz_only, use_ssh=False):
     '''
     Shows the output of the topic in a terminal.
     '''
@@ -2356,39 +2367,37 @@ class MasterViewProxy(QtGui.QWidget):
       ret = (ret == QtGui.QMessageBox.Ok)
     if ret:
       for topic in selectedTopics:
-        self._add_topic_output2queue(topic, show_hz_only)
+        self._add_topic_output2queue(topic, show_hz_only, use_ssh)
 
-  def show_topic_output(self, topic_name, show_hz_only):
+  def show_topic_output(self, topic_name, show_hz_only, use_ssh=False):
     '''
     Shows the topic output in a new window.
     '''
     if not self.master_info is None:
       topic = self.master_info.getTopic("%s"%topic_name)
       if not topic is None:
-        self._add_topic_output2queue(topic, show_hz_only)
+        self._add_topic_output2queue(topic, show_hz_only, use_ssh)
       else:
         rospy.logwarn("topic not found: %s"%topic_name)
 
-  def _add_topic_output2queue(self, topic, show_hz_only):
+  def _add_topic_output2queue(self, topic, show_hz_only, use_ssh=False):
     try:
         # connect to topic on remote host
         import shlex, subprocess
         env = dict(os.environ)
         env["ROS_MASTER_URI"] = str(self.masteruri)
-        cmd = ' '.join(['rosrun', 'node_manager_fkie', 'node_manager', '--echo', topic.name, topic.type, '--hz' if show_hz_only else '', ''.join(['__name:=echo_','hz_' if show_hz_only else '',str(nm.nameres().getHostname(self.masteruri)), topic.name])])
-        rospy.loginfo("Echo topic: %s", cmd)
-        ps = subprocess.Popen(shlex.split(cmd), env=env, close_fds=True)
+        nodename = 'echo_%s%s%s%s'%('hz_' if show_hz_only else '', 'ssh_' if use_ssh else '', str(nm.nameres().getHostname(self.masteruri)), topic.name)
+        cmd = 'rosrun node_manager_fkie node_manager --echo %s %s %s %s __name:=%s'%(topic.name, topic.type, '--hz' if show_hz_only else '', '--ssh' if use_ssh else '', nodename)
+        rospy.loginfo("Echo topic: %s"%cmd)
+        ps = SupervisedPopen(shlex.split(cmd), env=env, close_fds=True, id=topic.name, description='Echo topic: %s'%topic.name)
+        ps.finished.connect(self._topic_dialog_closed)
         self.__echo_topics_dialogs[topic.name] = ps
-        # wait for process to avoid 'defunct' processes
-        thread = threading.Thread(target=ps.wait)
-        thread.setDaemon(True)
-        thread.start()
     except Exception, e:
-      rospy.logwarn("Echo topic '%s' failed: %s", str(topic.name), str(e))
+      rospy.logwarn("Echo topic '%s' failed: %s"%(topic.name, e))
       WarningMessageBox(QtGui.QMessageBox.Warning, "Echo of topic error", 
-                        ''.join(['Echo of topic ', topic.name, ' failed!']),
-                        str(e)).exec_()
-  
+                        'Echo of topic %s failed!'%topic.name,
+                        '%s'%e).exec_()
+
   def _topic_dialog_closed(self, topic_name):
     if self.__echo_topics_dialogs.has_key(topic_name):
       del self.__echo_topics_dialogs[topic_name]
@@ -2500,10 +2509,10 @@ class MasterViewProxy(QtGui.QWidget):
           rospy.logwarn("Error on delete parameter '%s': %s", parameter, msg)
     except:
       import traceback
-      rospy.logwarn("Error on delete parameter: %s", traceback.format_exc())
+      rospy.logwarn("Error on delete parameter: %s", traceback.format_exc(1))
       WarningMessageBox(QtGui.QMessageBox.Warning, "Warning", 
                         'Error while delete a parameter to the ROS parameter server',
-                        traceback.format_exc()).exec_()
+                        traceback.format_exc(1)).exec_()
     else:
       self.on_get_parameter_clicked()
     finally:
@@ -2542,7 +2551,7 @@ class MasterViewProxy(QtGui.QWidget):
             f.write(yaml.dump(values, default_flow_style=False))
         except Exception as e:
           import traceback
-          print traceback.format_exc()
+          print traceback.format_exc(1)
           WarningMessageBox(QtGui.QMessageBox.Warning, "Save parameter Error", 
                            'Error while save parameter',
                             str(e)).exec_()

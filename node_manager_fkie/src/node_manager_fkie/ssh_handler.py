@@ -44,6 +44,7 @@ except Exception, e:
 
 import rospy
 import node_manager_fkie as nm
+from supervised_popen import SupervisedPopen
 
 class AuthenticationRequest(Exception):
   ''' '''
@@ -94,7 +95,7 @@ class SSHhandler(object):
     '''
     with self.mutex:
       try:
-        ssh = self._getSSH(host, self.settings().default_user if user is None else user, pw, True, auto_pw_request)
+        ssh = self._getSSH(host, nm.settings().host_user(host) if user is None else user, pw, True, auto_pw_request)
         if not ssh is None:
           sftp = ssh.open_sftp()
           try:
@@ -108,7 +109,7 @@ class SSHhandler(object):
       except Exception, e:
         raise
 
-  def ssh_exec(self, host, cmd, user=None, pw=None, auto_pw_request=False):
+  def ssh_exec(self, host, cmd, user=None, pw=None, auto_pw_request=False, get_pty=False, close_stdin=False, close_stdout=False, close_stderr=False):
     '''
     Executes a command on remote host. Returns the output channels with 
     execution result or None. The connection will be established using paramiko 
@@ -119,29 +120,31 @@ class SSHhandler(object):
     @type cmd: C{[str,...]}
     @param user: user name
     @param pw: the password
-    @return: the (stdin, stdout, stderr) and boolean of the executing command
-    @rtype: C{tuple(ChannelFile, ChannelFile, ChannelFile), boolean}
+    @return: the 4-tuple stdin, stdout, stderr and boolean of the executing command
+    @rtype: C{tuple(ChannelFile, ChannelFile, ChannelFile, boolean)}
     @see: U{http://www.lag.net/paramiko/docs/paramiko.SSHClient-class.html#exec_command}
     '''
     with self.mutex:
       try:
-        ssh = self._getSSH(host, self.settings().default_user if user is None else user, pw, True, auto_pw_request)
+        ssh = self._getSSH(host, nm.settings().host_user(host) if user is None else user, pw, True, auto_pw_request)
         if not ssh is None:
           cmd_str = str(' '.join(cmd))
           rospy.loginfo("REMOTE execute on %s@%s: %s", ssh._transport.get_username(), host, cmd_str)
-          (stdin, stdout, stderr) = ssh.exec_command(cmd_str)
-          stdin.close()
-          output = stdout.read()
-          error = stderr.read()
-          return output, error, True
-        else:
-          return '', '', False
+          (stdin, stdout, stderr) = ssh.exec_command(cmd_str, get_pty=get_pty)
+          if close_stdin:
+            stdin.close()
+          if close_stdout:
+            stdout.close()
+          if close_stderr:
+            stderr.close()
+          return stdin, stdout, stderr, True
       except AuthenticationRequest as e:
         raise
-      except Exception, e:
-        return '', str(e), False
+      except Exception as e:
+        raise
+    raise Exception('Can not login @%s'%host)
 
-    
+
   def ssh_x11_exec(self, host, cmd, title=None, user=None):
     '''
     Executes a command on remote host using a terminal with X11 forwarding. 
@@ -159,7 +162,7 @@ class SSHhandler(object):
     with self.mutex:
       try:
         # workaround: use ssh in a terminal with X11 forward
-        user = self.settings().default_user if user is None else user
+        user = nm.settings().host_user(host) if user is None else user
         if self.SSH_AUTH.has_key(host):
           user = self.SSH_AUTH[host]
         # generate string for SSH command
@@ -176,10 +179,10 @@ class SSHhandler(object):
         else:
           cmd_str = str(' '.join([ssh_str, ' '.join(cmd)]))
         rospy.loginfo("REMOTE x11 execute on %s: %s", host, cmd_str)
-        return subprocess.Popen(shlex.split(cmd_str))
+        return SupervisedPopen(shlex.split(cmd_str), id=str(title), description="REMOTE x11 execute on %s: %s"%(host, cmd_str))
       except:
-        pass
-    
+        raise
+
   def _getSSH(self, host, user, pw=None, do_connect=True, auto_pw_request=False):
     '''
     @return: the paramiko ssh client
@@ -200,11 +203,11 @@ class SSHhandler(object):
       session.set_missing_host_key_policy(paramiko.AutoAddPolicy())
       while (session.get_transport() is None or not session.get_transport().authenticated) and do_connect:
         try:
-          session.connect(host, username=user, password=pw, timeout=3)
+          session.connect(host, username=user, password=pw, timeout=3, compress=True)
           self.SSH_AUTH[host] = user
         except Exception, e:
 #          import traceback
-#          print traceback.format_exc()
+#          print traceback.format_exc(1)
           if str(e) in ['Authentication failed.', 'No authentication methods available', 'Private key file is encrypted']:
             if auto_pw_request:
               #'print "REQUEST PW-AUTO"
