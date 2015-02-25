@@ -173,6 +173,7 @@ class MainWindow(QtGui.QMainWindow):
     # stores the widget to a 
     self.masters = dict() # masteruri : MasterViewProxy
     self.currentMaster = None # MasterViewProxy
+    self._close_on_exit = True
 
     nm.file_watcher().file_changed.connect(self.on_configfile_changed)
     nm.file_watcher_param().file_changed.connect(self.on_configparamfile_changed)
@@ -233,7 +234,7 @@ class MainWindow(QtGui.QMainWindow):
         self.textBrowser.setText(examples.html_body(unicode(f.read())))
     except:
       import traceback
-      msg = "Error while generate help: %s"%traceback.format_exc()
+      msg = "Error while generate help: %s"%traceback.format_exc(2)
       rospy.logwarn(msg)
       self.textBrowser.setText(msg)
 
@@ -363,12 +364,38 @@ class MainWindow(QtGui.QMainWindow):
       settings.endGroup()
 
   def closeEvent(self, event):
-    try:
-      self.storeSetting()
-    except Exception as e:
-      rospy.logwarn("Error while store settings: %s"%e)
-    self.finish()
-    QtGui.QMainWindow.closeEvent(self, event)
+    # ask to close nodes on exit
+    if self._close_on_exit:
+      masters2stop, self._close_on_exit = SelectDialog.getValue('Stop nodes?', "Select masters where to stop:", self.masters.keys(), False, False, '', self, select_if_single=False)
+      if self._close_on_exit:
+        self._on_finish = True
+        for uri in masters2stop:
+          try:
+            m = self.masters[uri]
+            if not m is None:
+              m.stop_nodes_by_name(m.getRunningNodesIfLocal())
+          except Exception as e:
+            rospy.logwarn("Error while stop nodes on %s: %s"%(uri, e))
+        QtCore.QTimer.singleShot(200, self._test_for_finish)
+      else:
+        self._close_on_exit = True
+      event.ignore()
+    else:
+      try:
+        self.storeSetting()
+      except Exception as e:
+        rospy.logwarn("Error while store settings: %s"%e)
+      self.finish()
+      QtGui.QMainWindow.closeEvent(self, event)
+
+  def _test_for_finish(self):
+    # this method test on exit for running process queues with stopping jobs
+    for uri, m in self.masters.items():
+      if m.in_process():
+        QtCore.QTimer.singleShot(200, self._test_for_finish)
+        return
+    self._close_on_exit = False
+    self.close()
 
   def finish(self):
     if not self._finished:
@@ -607,6 +634,10 @@ class MainWindow(QtGui.QMainWindow):
     @type msg: L{master_discovery_fkie.msg.MasterState}
     '''
     #'print "*on_master_state_changed"
+    # do not update while closing
+    if hasattr(self, "_on_finish"):
+      rospy.logdebug("ignore changes on %s, because currently on closing...", msg.master.uri)
+      return;
     host=nm.nameres().getHostname(msg.master.uri)
     if msg.state == MasterState.STATE_CHANGED:
       nm.nameres().addMasterEntry(msg.master.uri, msg.master.name, host, host)
@@ -758,10 +789,12 @@ class MainWindow(QtGui.QMainWindow):
   def on_refresh_master_clicked(self):
     if not self.currentMaster is None:
       rospy.loginfo("Request an update from %s", str(self.currentMaster.master_state.monitoruri))
-      check_ts = self.currentMaster.master_info.check_ts
-      self.currentMaster.master_info.timestamp = self.currentMaster.master_info.timestamp - 1.0
-      self.currentMaster.master_info.check_ts = check_ts
-      self._update_handler.requestMasterInfo(self.currentMaster.master_state.uri, self.currentMaster.master_state.monitoruri)
+      if not self.currentMaster.master_info is None:
+        check_ts = self.currentMaster.master_info.check_ts
+        self.currentMaster.master_info.timestamp = self.currentMaster.master_info.timestamp - 1.0
+        self.currentMaster.master_info.check_ts = check_ts
+      if not self.currentMaster.master_state is None:
+        self._update_handler.requestMasterInfo(self.currentMaster.master_state.uri, self.currentMaster.master_state.monitoruri)
       self.currentMaster.force_next_update()
 #      self.currentMaster.remove_all_def_configs()
 
@@ -805,7 +838,7 @@ class MainWindow(QtGui.QMainWindow):
                                         False))
       except (Exception, nm.StartException), e:
         import traceback
-        print traceback.format_exc()
+        print traceback.format_exc(1)
         rospy.logwarn("Error while start %s: %s"%(name, e))
         WarningMessageBox(QtGui.QMessageBox.Warning, "Start error",
                           'Error while start %s'%name,
@@ -840,7 +873,7 @@ class MainWindow(QtGui.QMainWindow):
           import traceback
           WarningMessageBox(QtGui.QMessageBox.Warning, "Start sync error",
                             "Error while start sync node",
-                            str(traceback.format_exc())).exec_()
+                            str(traceback.format_exc(1))).exec_()
       else:
         self.syncButton.setChecked(False)
     elif sync_node is not None:
@@ -924,7 +957,10 @@ class MainWindow(QtGui.QMainWindow):
           self.showMasterName(masteruri, name, self.timestampStr(master.master_info.check_ts), master.master_state.online)
           pass
         elif not master.master_state is None:
-          self.showMasterName(masteruri, name, 'Try to get info!!!', master.master_state.online)
+          text = 'Try to get info!!!'
+          if not nm.settings().autoupdate:
+            text = 'Press F5 or click on reload to get info'
+          self.showMasterName(masteruri, name, text, master.master_state.online)
       else:
         self.showMasterName('', 'No robot selected', None, False)
     if (current_time - self._refresh_time > 30.0):
@@ -1112,7 +1148,7 @@ class MainWindow(QtGui.QMainWindow):
         check_ts = m.master_info.check_ts
         m.master_info.timestamp = m.master_info.timestamp - 1.0
         m.master_info.check_ts = check_ts
-    self.masterlist_service.retrieveMasterList(self.getMasteruri(), False)
+    self.masterlist_service.refresh(self.getMasteruri(), False)
 
   def on_discover_network_clicked(self):
     try:
@@ -1127,12 +1163,15 @@ class MainWindow(QtGui.QMainWindow):
     Tries to start the master_discovery node on the machine requested by a dialog.
     '''
     # get the history list
+    user_list = [self.userComboBox.itemText(i) for i in reversed(range(self.userComboBox.count()))]
+    user_list.insert(0, 'last used')
     params_optional = {'Discovery type': ('string', ['master_discovery', 'zeroconf']),
                        'ROS Master Name' : ('string', 'autodetect'),
                        'ROS Master URI' : ('string', 'ROS_MASTER_URI'),
-                       'Static hosts' : ('string', ''),
-                       'Username' : ('string', [self.userComboBox.itemText(i) for i in reversed(range(self.userComboBox.count()))]),
-                       'Send MCast' : ('bool', True),
+                       'Robot hosts' : ('string', ''),
+                       'Username' : ('string', user_list),
+                       'MCast Group' : ('string', '226.0.0.0'),
+                       'Heartbeat [Hz]' : ('float', 0.5)
                       }
     params = {'Host' : ('string', 'localhost'),
               'Network(0..99)' : ('int', '0'),
@@ -1140,7 +1179,7 @@ class MainWindow(QtGui.QMainWindow):
     dia = ParameterDialog(params, sidebar_var='Host')
     dia.setFilterVisible(False)
     dia.setWindowTitle('Start discovery')
-    dia.resize(450,280)
+    dia.resize(450,300)
     dia.setFocusField('Host')
     if dia.exec_():
       try:
@@ -1153,34 +1192,39 @@ class MainWindow(QtGui.QMainWindow):
         if len(hostnames) < 2:
           mastername = params['Optional Parameter']['ROS Master Name']
           masteruri = params['Optional Parameter']['ROS Master URI']
-        static_hosts = params['Optional Parameter']['Static hosts']
+        robot_hosts = params['Optional Parameter']['Robot hosts']
         username = params['Optional Parameter']['Username']
-        send_mcast = params['Optional Parameter']['Send MCast']
-        if static_hosts:
-          static_hosts = static_hosts.replace(' ', '')
-          static_hosts = static_hosts.replace('[', '')
-          static_hosts = static_hosts.replace(']', '')
+        mcast_group = params['Optional Parameter']['MCast Group']
+        heartbeat_hz = params['Optional Parameter']['Heartbeat [Hz]']
+        if robot_hosts:
+          robot_hosts = robot_hosts.replace(' ', '')
+          robot_hosts = robot_hosts.replace('[', '')
+          robot_hosts = robot_hosts.replace(']', '')
         for hostname in hostnames:
           try:
             args = []
             if not port is None and port and int(port) < 100 and int(port) >= 0:
-              args.append(''.join(['_mcast_port:=', str(11511 + int(port))]))
+              args.append('_mcast_port:=%s'%(11511 + int(port)))
             else:
-              args.append(''.join(['_mcast_port:=', str(11511)]))
+              args.append('_mcast_port:=%s'%(11511))
             if not mastername == 'autodetect':
-              args.append(''.join(['_name:=', str(mastername)]))
-            args.append('_send_mcast:=%s'%str(send_mcast))
-            args.append(''.join(['_static_hosts:=[', static_hosts, ']']))
+              args.append('_name:=%s'%(mastername))
+            args.append('_mcast_group:=%s'%mcast_group)
+            args.append('_robot_hosts:=[%s]'%robot_hosts)
+            args.append('_heartbeat_hz:=%s'%heartbeat_hz)
             #TODO: remove the name parameter from the ROS parameter server
+            usr = username
+            if username == 'last used':
+              usr = nm.settings().host_user(hostname)
             self._progress_queue.add2queue(str(uuid.uuid4()), 
-                                           'start discovering on '+str(hostname), 
+                                           'start discovering on %s'%hostname,
                                            nm.starter().runNodeWithoutConfig, 
-                                           (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, username))
+                                           (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, usr))
 
           except (Exception, nm.StartException), e:
             import traceback
-            print traceback.format_exc()
-            rospy.logwarn("Error while start master_discovery for %s: %s", str(hostname), str(e))
+            print traceback.format_exc(1)
+            rospy.logwarn("Error while start master_discovery for %s: %s"%(str(hostname), e))
             WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
                               'Error while start master_discovery',
                               str(e)).exec_()
@@ -1226,7 +1270,7 @@ class MainWindow(QtGui.QMainWindow):
         master_proxy.launchfiles = path
       except Exception, e:
         import traceback
-        print traceback.format_exc()
+        print traceback.format_exc(1)
         WarningMessageBox(QtGui.QMessageBox.Warning, "Loading launch file", path, '%s'%e).exec_()
 #      self.setCursor(cursor)
     else:
@@ -1266,7 +1310,7 @@ class MainWindow(QtGui.QMainWindow):
             return
       except:
         import traceback
-        rospy.logwarn('Error while load %s as default: %s'%(path, traceback.format_exc()))
+        rospy.logwarn('Error while load %s as default: %s'%(path, traceback.format_exc(1)))
       hostname = host if host else nm.nameres().address(master_proxy.masteruri)
       name_file_prefix = os.path.basename(path).replace('.launch','').replace(' ', '_')
       node_name = roslib.names.SEP.join([hostname,
@@ -1527,6 +1571,9 @@ class MainWindow(QtGui.QMainWindow):
     elif url.toString().startswith('topichz://'):
       if not self.currentMaster is None:
         self.currentMaster.show_topic_output(url.encodedPath(), True)
+    elif url.toString().startswith('topichzssh://'):
+      if not self.currentMaster is None:
+        self.currentMaster.show_topic_output(url.encodedPath(), True, use_ssh=True)
     elif url.toString().startswith('topicpub://'):
       if not self.currentMaster is None:
         self.currentMaster.start_publisher(url.encodedPath())
