@@ -140,7 +140,7 @@ class MasterItem(QtGui.QStandardItem):
 #      self.updateNameView(self.master, self.quality, self)
     except:
       import traceback
-      print traceback.format_exc()
+      print traceback.format_exc(1)
 
   @property
   def master(self):
@@ -188,8 +188,10 @@ class MasterItem(QtGui.QStandardItem):
     tooltip = ''.join([tooltip, '<dl>'])
     tooltip = ''.join([tooltip, '<dt>', 'IP: ', str(self.master_ip), '</dt>'])
     if master.online:
-      if not quality is None:
+      if not quality is None and quality != -1.:
         tooltip = ''.join([tooltip, '<dt>', 'Quality: ', str(quality),' %', '</dt>'])
+      else:
+        tooltip = ''.join([tooltip, '<dt>', 'Quality: not available</dt>'])
 #      if item.checkState() == QtCore.Qt.Checked:
 #        tooltip = ''.join([tooltip, '<dt>', 'synchronized', '</dt>'])
     else:
@@ -203,7 +205,7 @@ class MasterItem(QtGui.QStandardItem):
       if self.master_ip is None:
         item.setIcon(self.ICONS['warning'])
         tooltip = ''.join([tooltip, '<h4>', 'Host not reachable by name!!! The ROS topics may not by connected!!!', '</h4>'])
-      elif not quality is None:
+      elif not quality is None and quality != -1.:
         if quality > 30:
           item.setIcon(self.ICONS['green'])
         elif quality > 5:
