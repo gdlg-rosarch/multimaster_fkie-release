@@ -43,6 +43,7 @@ from detailed_msg_box import WarningMessageBox
 import node_manager_fkie as nm
 from master_discovery_fkie.common import resolve_url
 from common import package_name
+from run_dialog import PackageDialog
 
 class Editor(QtGui.QTextEdit):
   '''
@@ -87,6 +88,10 @@ class Editor(QtGui.QTextEdit):
     self.path = '.'
     # enables drop events
     self.setAcceptDrops(True)
+    if filename.endswith('.launch'):
+      self.hl = XmlHighlighter(self.document())
+    else:
+      self.hl = YamlHighlighter(self.document())
 
 #  def __del__(self):
 #    print "********** desctroy:", self.objectName()
@@ -225,7 +230,7 @@ class Editor(QtGui.QTextEdit):
                 result.append(path)
             except:
               import traceback
-              print traceback.format_exc()
+              print traceback.format_exc(1)
       b = b.next()
     return result
 
@@ -282,22 +287,22 @@ class Editor(QtGui.QTextEdit):
           fileName = cursor.block().text()[startIndex+1:endIndex]
           if len(fileName) > 0:
             try:
-              f = QtCore.QFile(self.interpretPath(fileName))
-              if not f.exists():
+              qf = QtCore.QFile(self.interpretPath(fileName))
+              if not qf.exists():
                 # create a new file, if it does not exists
-                result = QtGui.QMessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", f.fileName()]), QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)
+                result = QtGui.QMessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", qf.fileName()]), QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)
                 if result == QtGui.QMessageBox.Yes:
-                  d = os.path.dirname(f.fileName())
-                  if not os.path.exists(dir):
+                  d = os.path.dirname(qf.fileName())
+                  if not os.path.exists(d):
                     os.makedirs(d)
-                  with open(f.fileName(),'w') as f:
-                    if f.fileName().endswith('.launch'):
+                  with open(qf.fileName(),'w') as f:
+                    if qf.fileName().endswith('.launch'):
                       f.write('<launch>\n\n</launch>')
-                  self.load_request_signal.emit(f.fileName())
+                  self.load_request_signal.emit(qf.fileName())
               else:
-                self.load_request_signal.emit(f.fileName())
+                self.load_request_signal.emit(qf.fileName())
             except Exception, e:
-              WarningMessageBox(QtGui.QMessageBox.Warning, "File not found", fileName, str(e)).exec_()
+              WarningMessageBox(QtGui.QMessageBox.Warning, "File not found %s"%fileName, str(e)).exec_()
     QtGui.QTextEdit.mouseReleaseEvent(self, event)
 
   def mouseMoveEvent(self, event):
@@ -324,7 +329,15 @@ class Editor(QtGui.QTextEdit):
       self.setMouseTracking(True)
     if event.modifiers() == QtCore.Qt.ControlModifier and event.key() == QtCore.Qt.Key_7:
       self.commentText()
-    if event.key() != QtCore.Qt.Key_Escape:
+    elif event.modifiers() == QtCore.Qt.AltModifier and event.key() == QtCore.Qt.Key_Space:
+      ext = os.path.splitext(self.filename)
+      if ext[1] in self.CONTEXT_FILE_EXT:
+        menu = self._create_context_substitution_menu()
+        if menu is None:
+          menu = self._create_context_tag_menu()
+        if menu:
+          menu.exec_(self.mapToGlobal(self.cursorRect().bottomRight()))
+    elif event.key() != QtCore.Qt.Key_Escape:
       # handle the shifting of the block
       if event.key() == QtCore.Qt.Key_Tab:
         self.shiftText()
@@ -342,15 +355,9 @@ class Editor(QtGui.QTextEdit):
     if event.key() == QtCore.Qt.Key_Control or event.key() == QtCore.Qt.Key_Shift:
       self.setMouseTracking(False)
       self.viewport().setCursor(QtCore.Qt.IBeamCursor)
-    elif event.modifiers() == QtCore.Qt.ControlModifier and event.key() == QtCore.Qt.Key_Space:
-      ext = os.path.splitext(self.filename)
-      if ext[1] in self.CONTEXT_FILE_EXT:
-        menu = self._create_context_substitution_menu()
-        if menu is None:
-          menu = self._create_context_tag_menu()
-        if menu:
-          menu.exec_(self.mapToGlobal(self.cursorRect().bottomRight()))
-    QtGui.QTextEdit.keyReleaseEvent(self, event)
+    else:
+      event.accept()
+      QtGui.QTextEdit.keyReleaseEvent(self, event)
 
   def commentText(self):
     cursor = self.textCursor()
@@ -550,7 +557,7 @@ class Editor(QtGui.QTextEdit):
           action.setData(data)
     except:
 #      import traceback
-#      print traceback.format_exc()
+#      print traceback.format_exc(1)
       return None
     return menu
 
@@ -840,10 +847,6 @@ class XmlEditor(QtGui.QDialog):
         self.files.append(filename)
         editor.setCurrentPath(os.path.basename(filename))
         editor.load_request_signal.connect(self.on_load_request)
-        if filename.endswith('.launch'):
-          self.hl = XmlHighlighter(editor.document())
-        else:
-          self.hl = YamlHighlighter(editor.document())
         editor.textChanged.connect(self.on_editor_textChanged)
         editor.cursorPositionChanged.connect(self.on_editor_positionChanged)
         editor.setFocus(QtCore.Qt.OtherFocusReason)
@@ -855,7 +858,7 @@ class XmlEditor(QtGui.QDialog):
             break
     except:
       import traceback
-      rospy.logwarn("Error while open %s: %s", filename, traceback.format_exc())
+      rospy.logwarn("Error while open %s: %s", filename, traceback.format_exc(1))
     self.tabWidget.setUpdatesEnabled(True)
     if search_text:
       if self.find(search_text, False):
@@ -891,7 +894,7 @@ class XmlEditor(QtGui.QDialog):
           self.close()
     except:
       import traceback
-      rospy.logwarn("Error while close tab %s: %s", str(tab_index), traceback.format_exc())
+      rospy.logwarn("Error while close tab %s: %s", str(tab_index), traceback.format_exc(1))
 
 #  def hideEvent(self, event):
 #    self.close()
@@ -1104,6 +1107,9 @@ class XmlEditor(QtGui.QDialog):
     # param tag
     add_param_tag_action = QtGui.QAction("<param>", self, statusTip="", triggered=self._on_add_param_tag)
     tag_menu.addAction(add_param_tag_action)
+    # param capability group tag
+    add_param_cap_group_tag_action = QtGui.QAction("<param capability group>", self, statusTip="", triggered=self._on_add_param_cap_group_tag)
+    tag_menu.addAction(add_param_cap_group_tag_action)
     # param tag with all attributes
     add_param_tag_all_action = QtGui.QAction("<param all>", self, statusTip="", triggered=self._on_add_param_tag_all)
     tag_menu.addAction(add_param_tag_all_action)
@@ -1141,17 +1147,21 @@ class XmlEditor(QtGui.QDialog):
                       '</group>')
 
   def _on_add_node_tag(self):
-    self._insert_text('<node name="NAME" pkg="PKG" type="BIN">\n'
-                      '</node>')
+    dia = PackageDialog()
+    if dia.exec_():
+      self._insert_text('<node name="%s" pkg="%s" type="%s">\n'
+                        '</node>'%(dia.binary, dia.package, dia.binary))
 
   def _on_add_node_tag_all(self):
-    self._insert_text('<node name="NAME" pkg="PKG" type="BIN"\n'
-                      '      args="arg1" machine="machine-name"\n'
-                      '      respawn="true" required="true"\n'
-                      '      ns="foo" clear_params="true|false"\n'
-                      '      output="log|screen" cwd="ROS_HOME|node"\n'
-                      '      launch-prefix="prefix arguments">\n'
-                      '</node>')
+    dia = PackageDialog()
+    if dia.exec_():
+      self._insert_text('<node name="%s" pkg="%s" type="%s"\n'
+                        '      args="arg1" machine="machine-name"\n'
+                        '      respawn="true" required="true"\n'
+                        '      ns="foo" clear_params="true|false"\n'
+                        '      output="log|screen" cwd="ROS_HOME|node"\n'
+                        '      launch-prefix="prefix arguments">\n'
+                        '</node>'%(dia.binary, dia.package, dia.binary))
 
   def _on_add_include_tag_all(self):
     self._insert_text('<include file="$(find pkg-name)/path/filename.xml"\n'
@@ -1166,6 +1176,9 @@ class XmlEditor(QtGui.QDialog):
 
   def _on_add_param_tag(self):
     self._insert_text('<param name="namespace/name" value="value" />')
+
+  def _on_add_param_cap_group_tag(self):
+    self._insert_text('<param name="capability_group" value="demo" />')
 
   def _on_add_param_tag_all(self):
     self._insert_text('<param name="namespace/name" value="value"\n'
@@ -1189,13 +1202,17 @@ class XmlEditor(QtGui.QDialog):
     self._insert_text('<arg name="foo" value="bar" />')
 
   def _on_add_test_tag(self):
-    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name">\n'
-                      '</test>')
+    dia = PackageDialog()
+    if dia.exec_():
+      self._insert_text('<test name="%s" pkg="%s" type="%s" test-name="test_%s">\n'
+                        '</test>'%(dia.binary, dia.package, dia.binary, dia.binary))
 
   def _on_add_test_tag_all(self):
-    self._insert_text('<test name="NAME" pkg="PKG" type="BIN" test-name="test_name"\n'
-                      '      args="arg1" time-limit="60.0"\n'
-                      '      ns="foo" clear_params="true|false"\n'
-                      '      cwd="ROS_HOME|node" retry="0"\n'
-                      '      launch-prefix="prefix arguments">\n'
-                      '</test>')
+    dia = PackageDialog()
+    if dia.exec_():
+      self._insert_text('<test name="%s" pkg="%s" type="%s" test-name="test_%s">\n'
+                        '      args="arg1" time-limit="60.0"\n'
+                        '      ns="foo" clear_params="true|false"\n'
+                        '      cwd="ROS_HOME|node" retry="0"\n'
+                        '      launch-prefix="prefix arguments">\n'
+                        '</test>'%(dia.binary, dia.package, dia.binary, dia.binary))
