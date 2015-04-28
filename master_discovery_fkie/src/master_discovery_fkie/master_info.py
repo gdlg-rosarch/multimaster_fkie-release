@@ -1114,7 +1114,9 @@ class MasterInfo(object):
              ``[ [str,str,str,int,str] ]``, 
              ``[ [str,str,str,str,str] ])``
     '''
-    iffilter = FilterInterface() if filter_interface is None else filter_interface
+    iffilter = filter_interface
+    if iffilter is None:
+      iffilter = FilterInterface.from_list()
     stamp = '%.9f'%self.timestamp
     stamp_local = '%.9f'%self.timestamp_local
     publishers = []
@@ -1136,7 +1138,7 @@ class MasterInfo(object):
       pn = []
       for n in topic.publisherNodes:
         if n in added_nodes:
-          if not iffilter.is_ignored_topic(n, name, topic.type):
+          if not iffilter.is_ignored_publisher(n, name, topic.type):
             pn.append(n)
             nodes_last_check.add(n)
       if pn:
@@ -1144,7 +1146,7 @@ class MasterInfo(object):
       sn = []
       for n in topic.subscriberNodes:
         if n in added_nodes:
-          if not iffilter.is_ignored_topic(n, name, topic.type):
+          if not iffilter.is_ignored_subscriber(n, name, topic.type):
             sn.append(n)
             nodes_last_check.add(n)
       if sn:
