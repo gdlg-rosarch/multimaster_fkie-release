@@ -294,7 +294,7 @@ class DiscoveredMaster(object):
           self._del_error(self.ERR_SOCKET)
         except:
           import traceback
-          msg = "socket error: %s"%traceback.format_exc()
+          msg = "socket error [%s]: %s"%(self.monitoruri, traceback.format_exc())
           rospy.logwarn(msg)
           self._add_error(self.ERR_SOCKET, msg)
           time.sleep(1)
@@ -514,18 +514,20 @@ class Discoverer(object):
     rospy.Service('~list_masters', DiscoverMasters, self.rosservice_list_masters)
     rospy.Service('~refresh', std_srvs.srv.Empty, self.rosservice_refresh)
 
-    # create a thread to handle the received multicast messages
-    self._recvThread = threading.Thread(target = self.recv_loop)
-    self._recvThread.setDaemon(True)
-    self._recvThread.start()
-
     # create a thread to monitor the ROS master state
-    self.master_monitor = MasterMonitor(monitor_port, ipv6=self._is_ipv6_group(mcast_group))
+    mgroup = McastSocket.normalize_mgroup(mcast_group)
+    is_ip6 = self._is_ipv6_group(mgroup)
+    self.master_monitor = MasterMonitor(monitor_port, ipv6=is_ip6)
     # create timer to check for ros master changes
     self._timer_ros_changes = threading.Timer(0.1, self.checkROSMaster_loop)
 #     self._masterMonitorThread = threading.Thread(target = self.checkROSMaster_loop)
 #     self._masterMonitorThread.setDaemon(True)
 #     self._masterMonitorThread.start()
+
+    # create a thread to handle the received multicast messages
+    self._recvThread = threading.Thread(target = self.recv_loop)
+    self._recvThread.setDaemon(True)
+    self._recvThread.start()
 
     # create a timer monitor the offline ROS master and calculate the link qualities
     self._timer_stats = threading.Timer(1, self.timed_stats_calculation)
@@ -946,6 +948,7 @@ class Discoverer(object):
     result = []
     with self.__lock:
       try:
+        current_errors = self.master_monitor.getMasterErrors()[1]
         for (_, v) in self.masters.iteritems():
           # add all errors to the responce
           for _, msg in v.errors.items():
@@ -957,8 +960,13 @@ class Discoverer(object):
               mo = urlparse(v.monitoruri)
               if v.masteruriaddr != mo.hostname:
                 msg = "Resolved host of ROS_MASTER_URI %s=%s and origin discovered IP=%s are different. Fix your network settings and restart master_dicovery!"%(o.hostname, v.masteruriaddr, mo.hostname)
-                rospy.logwarn(msg)
-                result.append(msg)
+                if not v.masteruriaddr.startswith('127.'):
+                  local_addresses = ['localhost'] + roslib.network.get_local_addresses()
+                  # check 127/8 and local addresses
+                  if not v.masteruriaddr in local_addresses:
+                    if msg not in current_errors:
+                      rospy.logwarn(msg)
+                    result.append(msg)
             except Exception as e:
               result.append("%s"%e)
               rospy.logwarn("%s"%e)
