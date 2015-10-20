@@ -436,7 +436,7 @@ class GroupItem(QtGui.QStandardItem):
     @param is_sync_running: If the master_sync is running, the nodes are marked 
       as ghost nodes. So they are handled as running nodes, but has not run 
       informations. This nodes are running on remote host, but are not
-      syncronized because of filter or errrors.
+      syncronized because of filter or errors.
     @type is_sync_running: bool
     '''
     ignore = ['/master_sync', '/master_discovery', '/node_manager']
@@ -461,6 +461,7 @@ class GroupItem(QtGui.QStandardItem):
     has_off = False
     has_duplicate = False
     has_ghosts = False
+    diag_level = 0
     for i in range(self.rowCount()):
       item = self.child(i)
       if isinstance(item, NodeItem):
@@ -471,20 +472,34 @@ class GroupItem(QtGui.QStandardItem):
           has_off = True
         elif item.state == NodeItem.STATE_RUN:
           has_running = True
+          if item.diagnostic_array and item.diagnostic_array[-1].level > 0:
+            if diag_level == 0:
+              diag_level = item.diagnostic_array[-1].level
+            elif item.diagnostic_array[-1].level == 2:
+              diag_level = 2
         elif item.state == NodeItem.STATE_GHOST:
           has_ghosts = True
         elif item.state == NodeItem.STATE_DUPLICATE:
           has_duplicate = True
+    diag_icon = None
+    if diag_level > 0:
+      diag_icon = NodeItem._diagnostic_level2icon(diag_level)
     if has_duplicate:
       self.setIcon(QtGui.QIcon(':/icons/imacadam_stop.png'))
     elif has_ghosts:
       self.setIcon(QtGui.QIcon(':/icons/state_ghost.png'))
     elif has_running and has_off:
-      self.setIcon(QtGui.QIcon(':/icons/state_part.png'))
+      if diag_icon is not None:
+        self.setIcon(diag_icon)
+      else:
+        self.setIcon(QtGui.QIcon(':/icons/state_part.png'))
     elif not has_running:
       self.setIcon(QtGui.QIcon(':/icons/state_off.png'))
     elif not has_off and has_running:
-      self.setIcon(QtGui.QIcon(':/icons/state_run.png'))
+      if diag_icon is not None:
+        self.setIcon(diag_icon)
+      else:
+        self.setIcon(QtGui.QIcon(':/icons/state_run.png'))
 
   def _create_html_list(self, title, items):
     result = ''
@@ -809,6 +824,7 @@ class NodeItem(QtGui.QStandardItem):
     self._has_running = False
     self.setIcon(QtGui.QIcon(':/icons/state_off.png'))
     self._state = NodeItem.STATE_OFF
+    self.diagnostic_array = []
 
   @property
   def state(self):
@@ -928,11 +944,30 @@ class NodeItem(QtGui.QStandardItem):
       if not self.parent_item is None and not isinstance(self.parent_item, HostItem):
         self.parent_item.updateIcon()
 
+  def append_diagnostic_status(self, diagnostic_status):
+    self.diagnostic_array.append(diagnostic_status)
+    self.updateDispayedName()
+    if not self.parent_item is None and not isinstance(self.parent_item, HostItem):
+      self.parent_item.updateIcon()
+    if len(self.diagnostic_array) > 15:
+      del self.diagnostic_array[0]
+
   def data(self, role):
     if role == self.NAME_ROLE:
       return self.name
     else:
       return QtGui.QStandardItem.data(self, role)
+
+  @staticmethod
+  def _diagnostic_level2icon(level):
+    if level == 1:
+      return QtGui.QIcon(':/icons/state_diag_warn.png')
+    elif level == 2:
+      return QtGui.QIcon(':/icons/state_diag_error.png')
+    elif level == 3:
+      return QtGui.QIcon(':/icons/state_diag_stale.png')
+    else:
+      return QtGui.QIcon(':/icons/state_diag_other.png')
 
   def updateDispayedName(self):
     '''
@@ -949,9 +984,14 @@ class NodeItem(QtGui.QStandardItem):
 #      local = (nm.nameres().getHostname(self.node_info.uri) == nm.nameres().getHostname(self.node_info.masteruri))
     if not self.node_info.pid is None:
       self._state = NodeItem.STATE_RUN
-      self.setIcon(QtGui.QIcon(':/icons/state_run.png'))
+      if self.diagnostic_array and self.diagnostic_array[-1].level > 0:
+        level = self.diagnostic_array[-1].level
+        self.setIcon(self._diagnostic_level2icon(level))
+        self.setToolTip(self.diagnostic_array[-1].message)
+      else:
+        self.setIcon(QtGui.QIcon(':/icons/state_run.png'))
 #      self.setIcon(ICONS['run'])
-      self.setToolTip('')
+        self.setToolTip('')
     elif not self.node_info.uri is None and not self.node_info.isLocal:
       self._state = NodeItem.STATE_RUN
       self.setIcon(QtGui.QIcon(':/icons/state_unknown.png'))
@@ -1525,7 +1565,7 @@ class NodeTreeModel(QtGui.QStandardItemModel):
     @param is_sync_running: If the master_sync is running, the nodes are marked 
       as ghost nodes. So they are handled as running nodes, but has not run 
       informations. This nodes are running on remote host, but are not
-      syncronized because of filter or errrors.
+      syncronized because of filter or errors.
     @type is_sync_running: bool
     '''
     for i in reversed(range(self.invisibleRootItem().rowCount())):

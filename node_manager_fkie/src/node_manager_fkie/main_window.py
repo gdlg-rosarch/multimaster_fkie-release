@@ -33,6 +33,7 @@
 import os
 import time
 import uuid
+import socket
 import xmlrpclib
 import getpass
 
@@ -45,6 +46,13 @@ from python_qt_binding import loadUi
 
 import roslib; roslib.load_manifest('node_manager_fkie')
 import rospy
+try:
+  from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+  DIAGNOSTICS_AVAILABLE = True
+except:
+  import sys
+  print >> sys.stderr, "Can not import 'diagnostic_msgs', feature disabled."
+  DIAGNOSTICS_AVAILABLE = False
 
 import gui_resources
 from .discovery_listener import MasterListService, MasterStateTopic, MasterStatisticTopic, OwnMasterMonitoring
@@ -80,6 +88,11 @@ class MainWindow(QtGui.QMainWindow):
   '''
   DELAYED_NEXT_REQ_ON_ERR = 5.0
 
+  if DIAGNOSTICS_AVAILABLE:
+    diagnostics_signal  = QtCore.Signal(DiagnosticStatus)
+  '''@ivar: the signal is emitted if a message on topic nm_notifier was
+  reiceved (DiagnosticStatus)'''
+
   def __init__(self, files=[], restricted_to_one_master=False, parent=None):
     '''
     Creates the window, connects the signals and init the class.
@@ -95,6 +108,7 @@ class MainWindow(QtGui.QMainWindow):
     self.__current_icon = None
     self.__current_master_label_name = None
     self._changed_files = dict()
+    self._changed_binaries = dict()
     self._changed_files_param = dict()
     #self.setAttribute(QtCore.Qt.WA_AlwaysShowToolTips, True)
     # setup main window frame
@@ -110,7 +124,9 @@ class MainWindow(QtGui.QMainWindow):
     self.userComboBox.editTextChanged.connect(self.on_user_changed)
     self.masterInfoFrame.setEnabled(False)
     self.infoButton.clicked.connect(self.on_info_clicked)
+    self.setTimeButton.clicked.connect(self.on_set_time_clicked)
     self.refreshHostButton.clicked.connect(self.on_refresh_master_clicked)
+    self.masterLogButton.clicked.connect(self.on_master_log_clicked)
     self.runButton.clicked.connect(self.on_run_node_clicked)
     self.syncButton.released.connect(self.on_sync_dialog_released)
 
@@ -175,8 +191,9 @@ class MainWindow(QtGui.QMainWindow):
     self.currentMaster = None # MasterViewProxy
     self._close_on_exit = True
 
-    nm.file_watcher().file_changed.connect(self.on_configfile_changed)
-    nm.file_watcher_param().file_changed.connect(self.on_configparamfile_changed)
+    nm.file_watcher().config_changed.connect(self.on_configfile_changed)
+    nm.file_watcher().binary_changed.connect(self.on_binaryfile_changed)
+    nm.file_watcher_param().config_changed.connect(self.on_configparamfile_changed)
     self.__in_question = set()
 
     ############################################################################
@@ -268,6 +285,7 @@ class MainWindow(QtGui.QMainWindow):
     self._update_handler = UpdateHandler()
     self._update_handler.master_info_signal.connect(self.on_master_info_retrieved)
     self._update_handler.master_errors_signal.connect(self.on_master_errors_retrieved)
+    self._update_handler.timediff_signal.connect(self.on_master_timediff_retrieved)
     self._update_handler.error_signal.connect(self.on_master_info_error)
 
     # this monitor class is used, if no master_discovery node is running to get the state of the local ROS master
@@ -294,6 +312,8 @@ class MainWindow(QtGui.QMainWindow):
 
     self._con_tries = dict()
     self._subscribe()
+    if DIAGNOSTICS_AVAILABLE:
+      self._sub_extended_log = rospy.Subscriber('/diagnostics_agg', DiagnosticArray, self._callback_diagnostics)
 
   def _dock_widget_in(self, area=QtCore.Qt.LeftDockWidgetArea, only_visible=False):
     result = []
@@ -374,7 +394,8 @@ class MainWindow(QtGui.QMainWindow):
           try:
             m = self.masters[uri]
             if not m is None:
-              m.stop_nodes_by_name(m.getRunningNodesIfLocal())
+              m.stop_nodes_by_name(m.getRunningNodesIfLocal(), True, [rospy.get_name()])
+            m.killall_roscore()
           except Exception as e:
             rospy.logwarn("Error while stop nodes on %s: %s"%(uri, e))
         QtCore.QTimer.singleShot(200, self._test_for_finish)
@@ -447,6 +468,8 @@ class MainWindow(QtGui.QMainWindow):
       self.masters[masteruri].request_xml_editor.disconnect()
       self.masters[masteruri].stop_nodes_signal.disconnect()
       self.masters[masteruri].robot_icon_updated.disconnect()
+      if DIAGNOSTICS_AVAILABLE:
+        self.diagnostics_signal.disconnect(self.masters[masteruri].append_diagnostic)
       self.stackedLayout.removeWidget(self.masters[masteruri])
       self.tabPlace.layout().removeWidget(self.masters[masteruri])
       for cfg in self.masters[masteruri].default_cfgs:
@@ -472,6 +495,8 @@ class MainWindow(QtGui.QMainWindow):
       self.masters[masteruri].request_xml_editor.connect(self.on_launch_edit)
       self.masters[masteruri].stop_nodes_signal.connect(self.on_stop_nodes)
       self.masters[masteruri].robot_icon_updated.connect(self._on_robot_icon_changed)
+      if DIAGNOSTICS_AVAILABLE:
+        self.diagnostics_signal.connect(self.masters[masteruri].append_diagnostic)
       self.stackedLayout.addWidget(self.masters[masteruri])
       if masteruri == self.getMasteruri():
         if self.default_load_launch:
@@ -704,6 +729,9 @@ class MainWindow(QtGui.QMainWindow):
     @param minfo: the ROS master Info
     @type minfo: L{master_discovery_fkie.MasterInfo}
     '''
+    if hasattr(self, "_on_finish"):
+      rospy.logdebug("ignore changes on %s, because currently on closing...", minfo.master.uri)
+      return;
     rospy.logdebug("MASTERINFO from %s (%s) received", minfo.mastername, minfo.masteruri)
     self._con_tries[minfo.masteruri] = 0
 #    cputimes_m = os.times()
@@ -752,6 +780,9 @@ class MainWindow(QtGui.QMainWindow):
   def on_master_errors_retrieved(self, masteruri, error_list):
     self.master_model.updateMasterErrors(nm.nameres().mastername(masteruri), error_list)
 
+  def on_master_timediff_retrieved(self, masteruri, timediff):
+    self.master_model.updateTimeDiff(nm.nameres().mastername(masteruri), timediff)
+
   def on_master_info_error(self, masteruri, error):
     if not self._con_tries.has_key(masteruri):
       self._con_tries[masteruri] = 0
@@ -790,6 +821,96 @@ class MainWindow(QtGui.QMainWindow):
     text = ''.join([text, '</dl>'])
     text = ''.join([text, '<dt><b>Version</b>: ', nm.__version__, ' (', nm.__date__,')', '</dt>'])
     QtGui.QMessageBox.about(self, 'About Node Manager', text)
+
+  def on_master_log_clicked(self):
+    '''
+    Tries to get the log of master_discovery node on the machine requested by a dialog.
+    '''
+    # get the history list
+    user_list = [self.userComboBox.itemText(i) for i in reversed(range(self.userComboBox.count()))]
+    user_list.insert(0, 'last used')
+    params = {'Host' : ('string', 'localhost'),
+              'Show master discovery log' : ('bool', True),
+              'Show master sync log' : ('bool', False),
+              'Username' : ('string', user_list),
+              'Only screen log' : ('bool', True),
+              #'Optional Parameter' : ('list', params_optional)
+              }
+    dia = ParameterDialog(params, sidebar_var='Host')
+    dia.setFilterVisible(False)
+    dia.setWindowTitle('Show log')
+    dia.resize(450,150)
+    dia.setFocusField('Host')
+    if dia.exec_():
+      try:
+        params = dia.getKeywords()
+        hostnames = params['Host'] if isinstance(params['Host'], list) else [params['Host']]
+        log_master_discovery = params['Show master discovery log']
+        log_master_sync = params['Show master sync log']
+        username = params['Username']
+        screen_only = params['Only screen log']
+        for hostname in hostnames:
+          try:
+            usr = username
+            if username == 'last used':
+              usr = nm.settings().host_user(hostname)
+            if log_master_discovery:
+              self._progress_queue.add2queue(str(uuid.uuid4()),
+                                             '%s: show log of master discovery'%hostname,
+                                           nm.starter().openLog,
+                                           ('/master_discovery', hostname, usr, screen_only))
+            if log_master_sync:
+              self._progress_queue.add2queue(str(uuid.uuid4()),
+                                             '%s: show log of master sync'%hostname,
+                                           nm.starter().openLog,
+                                           ('/master_sync', hostname, usr, screen_only))
+          except (Exception, nm.StartException) as err:
+            import traceback
+            print traceback.format_exc(1)
+            rospy.logwarn("Error while show LOG for master_discovery %s: %s"%(str(hostname), err))
+            WarningMessageBox(QtGui.QMessageBox.Warning, "Show log error",
+                              'Error while show log of master_discovery',
+                              '%s'%err).exec_()
+          self._progress_queue.start()
+      except Exception as err:
+        WarningMessageBox(QtGui.QMessageBox.Warning, "Show log error",
+                          'Error while parse parameter',
+                          '%s'%err).exec_()
+
+  def on_set_time_clicked(self):
+    if not self.currentMaster is None:# and not self.currentMaster.is_local:
+      try:
+        rospy.loginfo("Set remote host time to local time: %s"%self.currentMaster.master_state.uri)
+        socket.setdefaulttimeout(10)
+        p = xmlrpclib.ServerProxy(self.currentMaster.master_state.monitoruri)
+        uri, success, newtime, errormsg = p.setTime(time.time())
+        if not success:
+          if errormsg.find('password') > -1:
+            errormsg += "\nPlease modify /etc/sudoers and add user privilege, e.g:"
+            errormsg += "\n%s  ALL=NOPASSWD: /bin/date"%self.currentMaster.current_user
+            errormsg += "\n!!!needed to be at the very end of file, don't forget a new line at the end!!!"
+            errormsg += "\n\nBe aware, it does not replace the time synchronization!"
+            errormsg += "\nIt sets approximate time without undue delays on communication layer."
+          WarningMessageBox(QtGui.QMessageBox.Warning, "Time set error",
+                          'Error while set time on %s'%uri,
+                          '%s'%errormsg).exec_()
+        else:
+          timediff = time.time() - newtime
+          rospy.loginfo("  New time difference to %s is approx.: %.3fs"%(self.currentMaster.master_state.uri, timediff))
+          self.on_master_timediff_retrieved(self.currentMaster.master_state.uri, timediff)
+        #'print "STOP stop finished", node
+      except Exception as e:
+#            import traceback
+#            formatted_lines = traceback.format_exc(1).splitlines()
+        errormsg = '%s'%e
+        if errormsg.find('setTime') > -1:
+            errormsg += "\nUpdate remote multimaster_fkie!"
+        rospy.logwarn("Error while set time on %s: %s"%(self.currentMaster.master_state.uri, errormsg))
+        WarningMessageBox(QtGui.QMessageBox.Warning, "Time sync error",
+                        'Error while set time on %s'%self.currentMaster.master_state.uri,
+                        '%s'%errormsg).exec_()
+      finally:
+        socket.setdefaulttimeout(None)
 
   def on_refresh_master_clicked(self):
     if not self.currentMaster is None:
@@ -1437,6 +1558,21 @@ class MainWindow(QtGui.QMainWindow):
     else:
       self._changed_files[changed] = affected
 
+  def on_binaryfile_changed(self, changed, affected):
+    '''
+    Signal hander to handle the changes started binaries.
+    @param changed: the changed file
+    @type changed: str
+    @param affected: list of tuples(node name, masteruri, launchfile), which are
+                     affected by file change
+    @type affected: list
+    '''
+    if self.isActiveWindow():
+      self._changed_binaries[changed] = affected
+      self._check_for_changed_files()
+    else:
+      self._changed_binaries[changed] = affected
+
   def _check_for_changed_files(self):
     '''
     Check the dictinary with changed files and notify the masters about changes.
@@ -1465,6 +1601,41 @@ class MainWindow(QtGui.QMainWindow):
       for c in cfgs:
         choices[c][0].launchfiles = choices[c][1]
     self._changed_files.clear()
+
+  def _check_for_changed_binaries(self):
+    '''
+    Check the dictinary with changed binaries and notify the masters about changes.
+    '''
+    new_affected = list()
+    for _, affected in self._changed_binaries.items():#:=changed
+      for (nname, muri, lfile) in affected:
+        if not (nname, muri, lfile) in self.__in_question:
+          self.__in_question.add((nname, muri, lfile))
+          new_affected.append((nname, muri, lfile))
+    # if there are no question to restart the nodes -> ask
+    if new_affected:
+      choices = dict()
+      for (nname, muri, lfile) in new_affected:
+        master = self.getMaster(muri)
+        if not master is None:
+          master_nodes = master.getNode(nname)
+          if master_nodes and master_nodes[0].is_running():
+            choices[nname] = (master, lfile)
+          else:
+            nm.file_watcher().rem_binary(nname)
+      if choices:
+        nodes, _ = SelectDialog.getValue('Restart nodes?',
+                                     '<b>%s</b> was changed.<br>Select affected nodes to restart:'%', '.join([os.path.basename(f) for f in self._changed_binaries.keys()]), choices.keys(),
+                                     False, True,
+                                     '',
+                                     self)
+        for (nname, muri, lfile) in new_affected:
+          self.__in_question.remove((nname, muri, lfile))
+        for nname in nodes:
+          choices[nname][0].stop_nodes_by_name([nname])
+        for nname in nodes:
+          choices[nname][0].start_nodes_by_name([nname], choices[nname][1], True)
+    self._changed_binaries.clear()
 
   def on_configparamfile_changed(self, changed, affected):
     '''
@@ -1523,6 +1694,7 @@ class MainWindow(QtGui.QMainWindow):
     '''
     QtGui.QMainWindow.changeEvent(self, event)
     self._check_for_changed_files()
+    self._check_for_changed_binaries()
     self._check_for_changed_files_param()
 
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1670,3 +1842,11 @@ class MainWindow(QtGui.QMainWindow):
     master = self.getMaster(masteruri, False)
     if master:
       self._assigne_icon(master.mastername, resolve_url(path))
+
+  def _callback_diagnostics(self, data):
+    try:
+      for diagnostic in data.status:
+        if DIAGNOSTICS_AVAILABLE:
+          self.diagnostics_signal.emit(diagnostic)
+    except Exception as err:
+      rospy.logwarn('Error while process diagnostic messages: %s'%err)
