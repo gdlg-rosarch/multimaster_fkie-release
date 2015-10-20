@@ -33,12 +33,14 @@
     <file>icons/crystal_clear_show_hz_ssh.png</file>
     <file>icons/crystal_clear_show_io.png</file>
     <file>icons/crystal_clear_show_log.png</file>
+    <file>icons/crystal_clear_set_clock.png</file>
     <file>icons/crystal_clear_stack.png</file>
     <file>icons/crystal_clear_start_sync.png</file>
     <file>icons/crystal_clear_sync.png</file>
     <file>icons/crystal_clear_user.png</file>
     <file>icons/crystal_clear_warning.png</file>
     <file>icons/crystal_clear_xclock.png</file>
+    <file>icons/crystal_clear_xclock_fail.png</file>
     <file>icons/default_cfg.png</file>
     <file>icons/default_cfg_edit.png</file>
     <file>icons/deleket_deviantart_play.png</file>
@@ -52,7 +54,12 @@
     <file>icons/oxygen_view_refresh.png</file>
     <file>icons/remote.png</file>
     <file>icons/save.png</file>
+    <file>icons/state_diag_error.png</file>
+    <file>icons/state_diag_other.png</file>
+    <file>icons/state_diag_stale.png</file>
+    <file>icons/state_diag_warn.png</file>
     <file>icons/state_ghost.png</file>
+    <file>icons/state_notification.png</file>
     <file>icons/state_off.png</file>
     <file>icons/state_part.png</file>
     <file>icons/state_run.png</file>
