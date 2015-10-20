@@ -7,7 +7,10 @@ import shlex, subprocess
 import time
 import roslib; roslib.load_manifest('node_manager_fkie')
 import rospy
-import node_manager_fkie as nm
+try:
+  import node_manager_fkie as nm
+except:
+  import reduced_nm as nm
 
 
 

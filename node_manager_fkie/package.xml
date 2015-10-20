@@ -5,7 +5,7 @@
      configured ROS nodes on different hosts. For discovering 
      the running ROS master master_discovery node will be used.
   </description>
-  <version>0.4.1</version>
+  <version>0.4.2</version>
   <license>BSD, some icons are licensed under the GNU Lesser General Public License (LGPL) or Creative Commons Attribution-Noncommercial 3.0 License</license>
   <author>Alexander Tiderko</author>
   <author>Timo Roehling</author>
@@ -16,6 +16,7 @@
   
   <build_depend>multimaster_msgs_fkie</build_depend>
   <build_depend>master_discovery_fkie</build_depend>
+  <build_depend>diagnostic_msgs</build_depend>
 
   <run_depend>multimaster_msgs_fkie</run_depend>
   <run_depend>master_discovery_fkie</run_depend>
@@ -29,6 +30,7 @@
   <run_depend>rosservice</run_depend>
   <run_depend>dynamic_reconfigure</run_depend>
   <run_depend>rqt_reconfigure</run_depend>
+  <run_depend>diagnostic_msgs</run_depend>
 
   <run_depend>python_qt_binding</run_depend>
   <run_depend>python-paramiko</run_depend>
