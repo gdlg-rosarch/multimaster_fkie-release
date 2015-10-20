@@ -69,6 +69,7 @@ from progress_queue import ProgressQueue, InteractionNeededError #, ProgressThre
 from common import masteruri_from_ros, get_packages, package_name, resolve_paths
 from launch_server_handler import LaunchServerHandler
 from supervised_popen import SupervisedPopen
+#from yaml import nodes
 
 
 
@@ -120,6 +121,13 @@ class MasterViewProxy(QtGui.QWidget):
 
   loaded_config = QtCore.Signal(str, object)
   '''@ivar: the signal is emitted, after a launchfile is successful loaded (launchfile, LaunchConfig)'''
+
+  DIAGNOSTIC_LEVELS = {0 : 'OK',
+                       1 : 'WARN',
+                       2 : 'ERROR',
+                       3 : 'STALE',
+                       4 : 'UNKNOWN',
+                       5 : 'UNKNOWN'}
 
   def __init__(self, masteruri, parent=None):
     '''
@@ -593,8 +601,8 @@ class MasterViewProxy(QtGui.QWidget):
   def _load_launchfile(self, launchfile, argv_forced=[], pqid=None):
     '''
     This method will be called in another thread. The configuration parameter
-    of the launch file will be requested using `LaunchArgsSelectionRequest` and 
-    `InteractionNeededError`. After the file is successful loaded a 
+    of the launch file will be requested using `LaunchArgsSelectionRequest` and
+    `InteractionNeededError`. After the file is successful loaded a
     `loaded_config` signal will be emitted.
     '''
     stored_argv = None
@@ -1259,6 +1267,19 @@ class MasterViewProxy(QtGui.QWidget):
         else:
           text += '<dt><font color="#CC0000"><b>the node does not respond: </b></font>'
           text += '<a href="unregister_node://%s">unregister</a></dt>'%node.name
+      if node.diagnostic_array and node.diagnostic_array[-1].level > 0:
+        diag_status = node.diagnostic_array[-1]
+        level_str = self.DIAGNOSTIC_LEVELS[diag_status.level]
+        diag_color = '#FF6600'
+        if diag_status.level == 2:
+          diag_color = '#CC0000'
+        elif diag_status.level == 3:
+          diag_color = '#FFCC00'
+        elif diag_status.level > 3:
+          diag_color = '#0000CC'
+        text += '<dt><font color="%s"><b>%s: %s</b></font></dt>'%(diag_color, level_str, node.diagnostic_array[-1].message)
+#        if len(node.diagnostic_array) > 1:
+#          text += '<dt><font color="#FF6600"><a href="view_diagnostics://%s">view recent %d items</a></font></dt>'%(node.name, len(node.diagnostic_array))
       text += '</dl>'
       text += self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB', node.name)
       text += self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB', node.name)
@@ -1727,6 +1748,7 @@ class MasterViewProxy(QtGui.QWidget):
     if not node is None and not node.uri is None and (not self._is_in_ignore_list(node.name) or force):
       try:
         rospy.loginfo("Stop node '%s'[%s]", str(node.name), str(node.uri))
+        nm.file_watcher().rem_binary(node.name)
         #'print "STOP set timeout", node
         socket.setdefaulttimeout(10)
         #'print "STOP create xmlrpc", node
@@ -1751,7 +1773,7 @@ class MasterViewProxy(QtGui.QWidget):
       self.stop_nodes_signal.emit(node.masteruri, [node.name])
     return True
 
-  def stop_nodes(self, nodes):
+  def stop_nodes(self, nodes, force=False):
     '''
     Internal method to stop a list with nodes
     @param nodes: the list with nodes to stop
@@ -1762,10 +1784,10 @@ class MasterViewProxy(QtGui.QWidget):
       self._progress_queue.add2queue(str(uuid.uuid4()),
                                      'stop %s'%node.name,
                                      self.stop_node,
-                                     (node, (len(nodes)==1)))
+                                     (node, (len(nodes)==1) or force))
     self._progress_queue.start()
 
-  def stop_nodes_by_name(self, nodes):
+  def stop_nodes_by_name(self, nodes, force=False, ignore=[]):
     '''
     Stop nodes given in a list by their names.
     @param nodes: a list with full node names
@@ -1774,10 +1796,11 @@ class MasterViewProxy(QtGui.QWidget):
     result = []
     if not self.master_info is None:
       for n in nodes:
-        node = self.master_info.getNode(n)
-        if not node is None:
-          result.append(node)
-    self.stop_nodes(result)
+        if n not in ignore:
+          node = self.master_info.getNode(n)
+          if not node is None:
+            result.append(node)
+    self.stop_nodes(result, force)
 
   def kill_node(self, node, force=False):
     if not node is None and not node.uri is None and (not self._is_in_ignore_list(node.name) or force):
@@ -1806,6 +1829,22 @@ class MasterViewProxy(QtGui.QWidget):
           raise DetailedError("Kill error", 
                               ''.join(['Error while kill the node ', node.name]),
                               str(e))
+    return True
+
+  def killall_roscore(self):
+    host = nm.nameres().getHostname(self.masteruri)
+    if host:
+      try:
+        self._progress_queue.add2queue(str(uuid.uuid4()), 
+                                       'killall roscore on %s'%host,
+                                       nm.starter().killall_roscore,
+                                       (host, self.current_user))
+        self._progress_queue.start()
+      except Exception as e:
+        rospy.logwarn("Error while killall roscore on %s: %s"%(host, e))
+        raise DetailedError("Killall roscore error",
+                            'Error while killall roscore',
+                            '%s'%e)
     return True
 
 
@@ -1982,22 +2021,22 @@ class MasterViewProxy(QtGui.QWidget):
     Shows log files of the selected nodes.
     '''
     try:
+      only_screen = True
       key_mod = QtGui.QApplication.keyboardModifiers()
       if (key_mod & QtCore.Qt.ShiftModifier or key_mod & QtCore.Qt.ControlModifier):
-        self.masterTab.logButton.showMenu()
-      else:
-        selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-        ret = True
-        if len(selectedNodes) > 5:
-          ret = QtGui.QMessageBox.question(self, "Show Log", "You are going to open the logs of "+ str(len(selectedNodes)) + " nodes at once\nContinue?", QtGui.QMessageBox.Ok, QtGui.QMessageBox.Cancel)
-          ret = (ret == QtGui.QMessageBox.Ok)
-        if ret:
-          for node in selectedNodes:
-            self._progress_queue.add2queue(str(uuid.uuid4()),
-                                           ''.join(['show log of ', node.name]),
-                                           nm.starter().openLog,
-                                           (node.name, self.getHostFromNode(node), self.current_user))
-          self._progress_queue.start()
+        only_screen = False
+      selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+      ret = True
+      if len(selectedNodes) > 5:
+        ret = QtGui.QMessageBox.question(self, "Show Log", "You are going to open the logs of "+ str(len(selectedNodes)) + " nodes at once\nContinue?", QtGui.QMessageBox.Ok, QtGui.QMessageBox.Cancel)
+        ret = (ret == QtGui.QMessageBox.Ok)
+      if ret:
+        for node in selectedNodes:
+          self._progress_queue.add2queue(str(uuid.uuid4()),
+                                         ''.join(['show log of ', node.name]),
+                                         nm.starter().openLog,
+                                         (node.name, self.getHostFromNode(node), self.current_user, only_screen))
+        self._progress_queue.start()
     except Exception, e:
       import traceback
       print traceback.format_exc(1)
@@ -2074,7 +2113,7 @@ class MasterViewProxy(QtGui.QWidget):
             env = dict(os.environ)
             env["ROS_MASTER_URI"] = str(self.master_info.masteruri)
             rospy.loginfo("Start dynamic reconfiguration for '%s'"%node)
-            ps = SupervisedPopen(['rosrun', 'node_manager_fkie', 'dynamic_reconfigure', node, '__ns:=dynamic_reconfigure'], env=env, id=node, description='Start dynamic reconfiguration for %s failed'%node)
+            ps = SupervisedPopen(['rosrun', 'node_manager_fkie', 'dynamic_reconfigure', node, '__ns:=dynamic_reconfigure'], env=env, object_id=node, description='Start dynamic reconfiguration for %s failed'%node)
         except Exception, e:
           rospy.logwarn("Start dynamic reconfiguration for '%s' failed: %s"%(n.name, e))
           WarningMessageBox(QtGui.QMessageBox.Warning, "Start dynamic reconfiguration error", 
@@ -2389,7 +2428,7 @@ class MasterViewProxy(QtGui.QWidget):
         nodename = 'echo_%s%s%s%s'%('hz_' if show_hz_only else '', 'ssh_' if use_ssh else '', str(nm.nameres().getHostname(self.masteruri)), topic.name)
         cmd = 'rosrun node_manager_fkie node_manager --echo %s %s %s %s __name:=%s'%(topic.name, topic.type, '--hz' if show_hz_only else '', '--ssh' if use_ssh else '', nodename)
         rospy.loginfo("Echo topic: %s"%cmd)
-        ps = SupervisedPopen(shlex.split(cmd), env=env, stderr=None, close_fds=True, id=topic.name, description='Echo topic: %s'%topic.name)
+        ps = SupervisedPopen(shlex.split(cmd), env=env, stderr=None, close_fds=True, object_id=topic.name, description='Echo topic: %s'%topic.name)
         ps.finished.connect(self._topic_dialog_closed)
         self.__echo_topics_dialogs[topic.name] = ps
     except Exception, e:
@@ -2714,6 +2753,21 @@ class MasterViewProxy(QtGui.QWidget):
       _, _, self._nm_materuri = master.getUri(rospy.get_name()) # reuslt: code, message, self._nm_materuri
     return self._nm_materuri
 
+
+  def append_diagnostic(self, diagnostic_status):
+    nodes = self.getNode(diagnostic_status.name)
+    for node in nodes:
+      node.append_diagnostic_status(diagnostic_status)
+    if nodes:
+      # get node by selected items
+      if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Nodes':
+        return
+      selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
+      selectedNodes = self.nodesFromIndexes(selections)
+      if len(selectedNodes) == 1:
+        node = selectedNodes[0]
+        if node.name == diagnostic_status.name:
+          self.on_node_selection_changed(None, None)
 
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   #%%%%%%%%%%%%%   Shortcuts handling                               %%%%%%%%
