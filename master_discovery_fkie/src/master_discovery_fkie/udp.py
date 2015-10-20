@@ -30,6 +30,7 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+import os
 import socket
 import struct
 import fcntl
@@ -73,8 +74,7 @@ class McastSocket(socket.socket):
     @param ttl: time to leave
     @type ttl: int (Default: 20)
     '''
-    # get info about the IP version (4 or 6)
-    addrinfo = socket.getaddrinfo(mgroup, None)[0]
+    addrinfo = McastSocket.getaddrinfo(mgroup)
     socket.socket.__init__(self, addrinfo[0], socket.SOCK_DGRAM, socket.IPPROTO_UDP)
 
     # Allow multiple copies of this program on one machine
@@ -94,7 +94,7 @@ class McastSocket(socket.socket):
       self.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 1)
 
     #join to the multicast group 
-    group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
+    group_bin = socket.inet_pton(addrinfo[0], McastSocket.normalize_mgroup(mgroup))
     try:
       if addrinfo[0] == socket.AF_INET: # IPv4
         mreq = group_bin + struct.pack('=I', socket.INADDR_ANY)
@@ -112,6 +112,34 @@ class McastSocket(socket.socket):
     self.group_bin = group_bin
     self.sock_5_error_printed = []
 
+  @staticmethod
+  def getaddrinfo(mgroup):
+    # get info about the IP version (4 or 6)
+    groupaddr, interface = McastSocket.normalize_mgroup(mgroup, True)
+    addrinfos = socket.getaddrinfo(groupaddr, None)
+    addrinfo = None
+    if len(addrinfos) > 1:
+      addrinfo = addrinfos[0]
+      if not interface:
+        interface = rospy.get_param('~interface', '')
+      if not interface and 'ROS_IP' in os.environ:
+        interface = os.environ['ROS_IP']
+      if interface:
+        addrinfos = socket.getaddrinfo(interface, None)
+        if len(addrinfos) >= 1:
+          rospy.loginfo("  Use userdefined interface %s to send multicast messages"%interface)
+          return addrinfos[0]
+      rospy.loginfo(" Use first of %d interfaces to send multicast messages"%len(addrinfos))
+    else:
+      return addrinfos[0]
+    return addrinfo
+
+  @staticmethod
+  def normalize_mgroup(mgroup, getinterface=False):
+    groupaddr, _, interface = mgroup.partition('@')
+    if getinterface:
+      return groupaddr, interface
+    return groupaddr
 
   def close(self):
     '''
