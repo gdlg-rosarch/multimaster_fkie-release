@@ -30,56 +30,55 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+from datetime import datetime
+from python_qt_binding import QtCore
+from python_qt_binding import QtGui
+from python_qt_binding import loadUi
+import getpass
 import os
+import socket
 import time
 import uuid
-import socket
 import xmlrpclib
-import getpass
 
-from datetime import datetime
-
-from python_qt_binding import QtGui
-from python_qt_binding import QtCore
-#from python_qt_binding import QtUiTools
-from python_qt_binding import loadUi
-
-import roslib; roslib.load_manifest('node_manager_fkie')
+from multimaster_msgs_fkie.msg import MasterState
 import rospy
+
+from master_discovery_fkie.common import resolve_url
+import gui_resources
+import node_manager_fkie as nm
+
+from .capability_table import CapabilityTable
+from .common import masteruri_from_ros, package_name
+from .detailed_msg_box import WarningMessageBox
+from .discovery_listener import MasterListService, MasterStateTopic, MasterStatisticTopic, OwnMasterMonitoring
+from .launch_config import LaunchConfig  # , LaunchConfigException
+from .launch_files_widget import LaunchFilesWidget
+from .log_widget import LogWidget
+from .master_list_model import MasterModel, MasterSyncItem
+from .master_view_proxy import MasterViewProxy
+from .menu_rqt import MenuRqt
+from .network_discovery_dialog import NetworkDiscoveryDialog
+from .parameter_dialog import ParameterDialog
+from .progress_queue import ProgressQueue  # , ProgressThread
+from .screen_handler import ScreenHandler
+from .select_dialog import SelectDialog
+from .settings_widget import SettingsWidget
+from .sync_dialog import SyncDialog
+from .update_handler import UpdateHandler
+from .xml_editor import XmlEditor
+
+
+#from python_qt_binding import QtUiTools
+import roslib; roslib.load_manifest('node_manager_fkie')
 try:
   from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
   DIAGNOSTICS_AVAILABLE = True
 except:
   import sys
-  print >> sys.stderr, "Can not import 'diagnostic_msgs', feature disabled."
+  print >> sys.stderr, "Cannot import 'diagnostic_msgs', feature disabled."
   DIAGNOSTICS_AVAILABLE = False
 
-import gui_resources
-from .discovery_listener import MasterListService, MasterStateTopic, MasterStatisticTopic, OwnMasterMonitoring
-from .update_handler import UpdateHandler
-from .master_view_proxy import MasterViewProxy
-from .launch_config import LaunchConfig#, LaunchConfigException
-from .capability_table import CapabilityTable
-from .xml_editor import XmlEditor
-from .detailed_msg_box import WarningMessageBox
-from .network_discovery_dialog import NetworkDiscoveryDialog
-from .parameter_dialog import ParameterDialog
-from .progress_queue import ProgressQueue#, ProgressThread
-from .screen_handler import ScreenHandler
-from .sync_dialog import SyncDialog
-from .common import masteruri_from_ros, package_name
-from .select_dialog import SelectDialog
-from .master_list_model import MasterModel, MasterSyncItem
-from .log_widget import LogWidget
-from .launch_files_widget import LaunchFilesWidget
-from .settings_widget import SettingsWidget
-from .menu_rqt import MenuRqt
-
-import node_manager_fkie as nm
-
-from multimaster_msgs_fkie.msg import LinkState, LinkStatesStamped, MasterState#, ROSMaster, SyncMasterInfo, SyncTopicInfo
-from master_discovery_fkie.common import resolve_url
-#from master_discovery_fkie.srv import DiscoverMasters, GetSyncInfo
 
 
 class MainWindow(QtGui.QMainWindow):
@@ -390,12 +389,17 @@ class MainWindow(QtGui.QMainWindow):
       masters2stop, self._close_on_exit = SelectDialog.getValue('Stop nodes?', "Select masters where to stop:", self.masters.keys(), False, False, '', self, select_if_single=False)
       if self._close_on_exit:
         self._on_finish = True
+        self._stop_local_master = None
         for uri in masters2stop:
           try:
             m = self.masters[uri]
             if not m is None:
-              m.stop_nodes_by_name(m.getRunningNodesIfLocal(), True, [rospy.get_name()])
-            m.killall_roscore()
+              if m.is_local:
+                self._stop_updating()
+                self._stop_local_master = m
+              m.stop_nodes_by_name(m.getRunningNodesIfLocal(), True, [rospy.get_name(), '/rosout'])
+              if not m.is_local:
+                m.killall_roscore()
           except Exception as e:
             rospy.logwarn("Error while stop nodes on %s: %s"%(uri, e))
         QtCore.QTimer.singleShot(200, self._test_for_finish)
@@ -416,24 +420,31 @@ class MainWindow(QtGui.QMainWindow):
       if m.in_process():
         QtCore.QTimer.singleShot(200, self._test_for_finish)
         return
+    if hasattr(self, '_stop_local_master') and self._stop_local_master is not None:
+      self.finish()
+      self._stop_local_master.killall_roscore()
+      del self._stop_local_master
     self._close_on_exit = False
     self.close()
+
+  def _stop_updating(self):
+    self._progress_queue.stop()
+    self._progress_queue_sync.stop()
+    self._update_handler.stop()
+    self.state_topic.stop()
+    self.stats_topic.stop()
+    self.own_master_monitor.stop()
+    self.master_timecheck_timer.stop()
+    self.launch_dock.stop()
+    self.log_dock.stop()
 
   def finish(self):
     if not self._finished:
       self._finished = True
       print "Mainwindow finish..."
-      self._progress_queue.stop()
-      self._progress_queue_sync.stop()
-      self._update_handler.stop()
-      self.state_topic.stop()
-      self.stats_topic.stop()
+      self._stop_updating()
       for _, master in self.masters.iteritems():
         master.stop()
-      self.own_master_monitor.stop()
-      self.master_timecheck_timer.stop()
-      self.launch_dock.stop()
-      self.log_dock.stop()
       print "Mainwindow finished!"
 
   def getMasteruri(self):
@@ -951,14 +962,19 @@ class MainWindow(QtGui.QMainWindow):
     if not self.currentMaster is None:
       try:
         args = []
+        tool = 'rqt_gui'
+        prefix = 'rqt'
+        if name == 'RViz':
+          prefix = 'rviz'
+          tool = 'rviz'
         if plugin:
           args = ['-s', plugin]
-        node_name = 'rqt_%s_%s'%(name.lower().replace(' ', '_'),
-                             self.currentMaster.master_state.name.replace('-', '_'))
+        node_name = '%s_%s_%s' % (prefix, name.lower().replace(' ', '_'),
+                                  self.currentMaster.master_state.name.replace('-', '_'))
         self.currentMaster._progress_queue.add2queue(str(uuid.uuid4()),
-                                       'start logger level',
+                                       'start %s' % name,
                                        nm.starter().runNodeWithoutConfig,
-                                       ('localhost', 'rqt_gui', 'rqt_gui',
+                                       ('localhost', tool, tool,
                                         node_name, args, 
                                         '%s'%self.currentMaster.master_state.uri, 
                                         False))
@@ -1378,6 +1394,25 @@ class MainWindow(QtGui.QMainWindow):
                         'Error while start master_discovery',
                         str(e)).exec_()
 
+  def poweroff_host(self, host):
+    try:
+      masteruris = nm.nameres().masterurisByHost(host)
+      for masteruri in masteruris:
+        master = self.getMaster(masteruri)
+        master.stop_nodes_by_name(['/master_discovery'])
+      self._progress_queue.add2queue(str(uuid.uuid4()),
+                                     'poweroff `%s`'%host,
+                                     nm.starter().poweroff,
+                                     ('%s'%host,))
+      self._progress_queue.start()
+      self.on_description_update('Description', '')
+      self.launch_dock.raise_()
+    except (Exception, nm.StartException), e:
+      rospy.logwarn("Error while poweroff %s: %s", host, str(e))
+      WarningMessageBox(QtGui.QMessageBox.Warning, "Run error",
+                        'Error while poweroff %s'%host,
+                        '%s'%e).exec_()
+
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   #%%%%%%%%%%%%%         Handling of the launch view signals        %%%%%%%%
   #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1712,7 +1747,10 @@ class MainWindow(QtGui.QMainWindow):
       master.stop_nodes_by_name(nodes)
 
   def on_description_update(self, title, text):
-    if (self.sender() == self.currentMaster or not isinstance(self.sender(), MasterViewProxy)) and (not self.descriptionTextEdit.hasFocus() or self._accept_next_update):
+    same_title = self.descriptionDock.windowTitle() == title
+    valid_sender = self.sender() == self.currentMaster or not isinstance(self.sender(), MasterViewProxy)
+    no_focus = not self.descriptionTextEdit.hasFocus()
+    if (valid_sender) and (same_title or no_focus or self._accept_next_update):
       self._accept_next_update = False
       self.descriptionDock.setWindowTitle(title)
       self.descriptionTextEdit.setText(text)
@@ -1779,6 +1817,9 @@ class MainWindow(QtGui.QMainWindow):
     elif url.toString().startswith('start_node_at_host://'):
       if not self.currentMaster is None:
         self.currentMaster.on_start_nodes_at_host()
+    elif url.toString().startswith('start_node_adv://'):
+      if not self.currentMaster is None:
+        self.currentMaster.on_start_alt_clicked()
     elif url.toString().startswith('kill_node://'):
       if not self.currentMaster is None:
         self.currentMaster.on_kill_nodes()
@@ -1792,6 +1833,8 @@ class MainWindow(QtGui.QMainWindow):
       self.on_launch_edit([str(url.encodedPath())], '')
     elif url.toString().startswith('reload_globals://'):
       self._reload_globals_at_next_start(str(url.encodedPath()).replace('reload_globals://', ''))
+    elif url.toString().startswith('poweroff://'):
+      self.poweroff_host(url.encodedHost())
     else:
       QtGui.QDesktopServices.openUrl(url)
 
