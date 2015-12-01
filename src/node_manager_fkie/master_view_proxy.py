@@ -39,7 +39,6 @@ import os
 import sys
 import socket
 import xmlrpclib
-import threading
 #import time
 import uuid
 import getpass
@@ -52,23 +51,24 @@ from rosgraph.names import is_legal_name
 
 
 import node_manager_fkie as nm
-from html_delegate import HTMLDelegate
-from topic_list_model import TopicModel, TopicItem
-from node_tree_model import NodeTreeModel, NodeItem, GroupItem, HostItem
-from service_list_model import ServiceModel, ServiceItem
-from parameter_list_model import ParameterModel, ParameterNameItem, ParameterValueItem
-from default_cfg_handler import DefaultConfigHandler
-from launch_config import LaunchConfig#, LaunchConfigException
-from master_discovery_fkie.master_info import NodeInfo 
-from parameter_dialog import ParameterDialog, MasterParameterDialog, ServiceDialog
-from select_dialog import SelectDialog
+from node_manager_fkie.html_delegate import HTMLDelegate
+from node_manager_fkie.topic_list_model import TopicModel, TopicItem
+from node_manager_fkie.node_tree_model import NodeTreeModel, NodeItem, GroupItem, HostItem
+from node_manager_fkie.service_list_model import ServiceModel, ServiceItem
+from node_manager_fkie.parameter_list_model import ParameterModel, ParameterNameItem, ParameterValueItem
+from node_manager_fkie.default_cfg_handler import DefaultConfigHandler
+from node_manager_fkie.launch_config import LaunchConfig#, LaunchConfigException
+from master_discovery_fkie.master_info import NodeInfo
+from node_manager_fkie.parameter_dialog import ParameterDialog, MasterParameterDialog, ServiceDialog
+from node_manager_fkie.select_dialog import SelectDialog
 #from echo_dialog import EchoDialog
-from parameter_handler import ParameterHandler
-from detailed_msg_box import WarningMessageBox, DetailedError
-from progress_queue import ProgressQueue, InteractionNeededError #, ProgressThread
-from common import masteruri_from_ros, get_packages, package_name, resolve_paths
-from launch_server_handler import LaunchServerHandler
-from supervised_popen import SupervisedPopen
+from node_manager_fkie.parameter_handler import ParameterHandler
+from node_manager_fkie.detailed_msg_box import WarningMessageBox, DetailedError
+from node_manager_fkie.progress_queue import ProgressQueue, InteractionNeededError #, ProgressThread
+from node_manager_fkie.common import masteruri_from_ros, get_packages, package_name, resolve_paths
+from node_manager_fkie.launch_server_handler import LaunchServerHandler
+from node_manager_fkie.supervised_popen import SupervisedPopen
+from node_manager_fkie.start_handler import AdvRunCfg
 #from yaml import nodes
 
 
@@ -1234,17 +1234,61 @@ class MasterViewProxy(QtGui.QWidget):
     # add node description for one selected node
     if len(selectedNodes) == 1:
       node = selectedNodes[0]
+      text = self.get_node_description(node_name, node)
+      name = node.name
+    elif len(selectedNodes) > 1:
+#      stoppable_nodes = [sn for sn in selectedNodes if not sn.node_info.uri is None and not self._is_in_ignore_list(sn.name)]
+      restartable_nodes = [sn for sn in selectedNodes if len(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
+      restartable_nodes_with_launchfiles = [sn for sn in selectedNodes if sn.has_launch_cfgs(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
+      killable_nodes = [sn for sn in selectedNodes if not sn.node_info.pid is None and not self._is_in_ignore_list(sn.name)]
+      unregisterble_nodes = [sn for sn in selectedNodes if sn.node_info.pid is None and not sn.node_info.uri is None and sn.node_info.isLocal and not self._is_in_ignore_list(sn.name)]
+      # add description for multiple selected nodes
+      if restartable_nodes or killable_nodes or unregisterble_nodes:
+        text += '<b>Selected nodes:</b><br>'
+      if restartable_nodes:
+        text += '<a href="restart_node://all_selected_nodes" title="Restart %s selected nodes"><img src=":icons/sekkyumu_restart_24.png" alt="restart">[%d]</a>'%(len(restartable_nodes), len(restartable_nodes))
+#        if killable_nodes or unregisterble_nodes:
+#          text += ' - '
+      if killable_nodes:
+        text += '&nbsp;<a href="kill_node://all_selected_nodes" title="Kill %s selected nodes"><img src=":icons/sekkyumu_kill_24.png" alt="kill">[%d]</a>'%(len(killable_nodes), len(killable_nodes))
+        text += '&nbsp;<a href="kill_screen://all_selected_nodes" title="Kill %s screens of selected nodes"><img src=":icons/sekkyumu_kill_screen_24.png" alt="killscreen">[%d]</a>'%(len(killable_nodes), len(killable_nodes))
+#        if unregisterble_nodes:
+#          text += ' - '
+      if restartable_nodes_with_launchfiles:
+        text += '&nbsp;<a href="start_node_at_host://all_selected_nodes" title="Start %s nodes at another host"><img src=":icons/sekkyumu_start_athost_24.png" alt="start@host">[%d]</a>'%(len(restartable_nodes_with_launchfiles), len(restartable_nodes_with_launchfiles))
+        text += '&nbsp;<a href="start_node_adv://all_selected_nodes" title="Start %s nodes with additional options, e.g. loglevel"><img src=":icons/sekkyumu_play_alt_24.png" alt="play alt">[%d]</a>'%(len(restartable_nodes_with_launchfiles), len(restartable_nodes_with_launchfiles))
+      if unregisterble_nodes:
+        text += '<br><a href="unregister_node://all_selected_nodes">unregister [%d]</a>'%len(unregisterble_nodes)
+
+    if (self.__last_info_type == 'Node' and self.__last_info_text != text) or force_emit:
+      self.__last_info_text = text
+      self.description_signal.emit(name, text)
+    self.updateButtons()
+
+  def get_node_description(self, node_name, node=None):
+    text = ''
+    if node_name and node is None and not self.master_info is None:
+      # get node by name
+      selectedNodes = self.getNode(node_name)
+      if len(selectedNodes) == 1:
+        node = selectedNodes[0]
+    # add node description for one selected node
+    if node is not None:
       # create description for a node
       ns, sep, name = node.name.rpartition(rospy.names.SEP)
       text = '<font size="+1"><b><span style="color:gray;">%s%s</span><b>%s</b></font><br>'%(ns, sep, name)
       launches = [c for c in node.cfgs if not isinstance(c, tuple)]
       default_cfgs = [c[0] for c in node.cfgs if isinstance(c, tuple)]
       if launches or default_cfgs:
-        text += '<a href="restart_node://%s">restart</a> - '%node.name
-      text += '<a href="kill_node://%s">kill</a> - '%node.name
-      text += '<a href="kill_screen://%s">kill screen</a><br>'%node.name
+#        text += '<a href="restart_node://%s">restart</a> - '%node.name
+        text += '<a href="restart_node://%s" title="Restart node"><img src=":icons/sekkyumu_restart_24.png" alt="restart"></a>'%node.name # height="24" width="24"
+      text += '&nbsp; <a href="kill_node://%s" title="Kill node with pid %s"><img src=":icons/sekkyumu_kill_24.png" alt="kill"></a>'%(node.name, node.pid)
+      text += '&nbsp; <a href="kill_screen://%s" title="Kill screen of the node"><img src=":icons/sekkyumu_kill_screen_24.png" alt="killscreen"></a>'%node.name
       if launches:
-        text += '<a href="start_node_at_host://%s">start@host</a>'%node.name
+        text += '&nbsp; <a href="start_node_at_host://%s"  title="Start node at another host"><img src=":icons/sekkyumu_start_athost_24.png" alt="start@host"></a>'%node.name
+        if node.node_info.pid is None or node.node_info.uri is None:
+          text += '&nbsp; <a href="start_node_adv://%s" title="Start node with additional options, e.g. loglevel"><img src=":icons/sekkyumu_play_alt_24.png" alt="play alt"></a>'%node.name
+      text += '&nbsp; <a href="copy_log_path://%s" title="copy log path to clipboard"><img src=":icons/crystal_clear_copy_log_path_24.png" alt="copy_log_path"></a>'%node.name
       text += '<dl>'
       text += '<dt><b>URI</b>: %s</dt>'%node.node_info.uri
       text += '<dt><b>PID</b>: %s</dt>'%node.node_info.pid
@@ -1287,44 +1331,18 @@ class MasterViewProxy(QtGui.QWidget):
       # set loaunch file paths
       text += self._create_html_list('Loaded Launch Files:', launches, 'LAUNCH')
       text += self._create_html_list('Default Configurations:', default_cfgs, 'NODE')
-      text += '<dt><a href="copy_log_path://%s">copy log path to clipboard</a></dt>'%node.name
-      text = '<div>%s</div>'%text
-      name = node.name
-    elif len(selectedNodes) > 1:
-#      stoppable_nodes = [sn for sn in selectedNodes if not sn.node_info.uri is None and not self._is_in_ignore_list(sn.name)]
-      restartable_nodes = [sn for sn in selectedNodes if len(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
-      killable_nodes = [sn for sn in selectedNodes if not sn.node_info.pid is None and not self._is_in_ignore_list(sn.name)]
-      unregisterble_nodes = [sn for sn in selectedNodes if sn.node_info.pid is None and not sn.node_info.uri is None and sn.node_info.isLocal and not self._is_in_ignore_list(sn.name)]
-      # add description for multiple selected nodes
-      if restartable_nodes or killable_nodes or unregisterble_nodes:
-        text += '<b>Selected nodes:</b><br>'
-      if restartable_nodes:
-        text += '<a href="restart_node://all_selected_nodes">restart [%d]</a>'%len(restartable_nodes)
-        if killable_nodes or unregisterble_nodes:
-          text += ' - '
-      if killable_nodes:
-        text += '<a href="kill_node://all_selected_nodes">kill [%d]</a> - '%len(killable_nodes)
-        text += '<a href="kill_screen://all_selected_nodes">kill screen [%d]</a>'%len(killable_nodes)
-        if unregisterble_nodes:
-          text += ' - '
-      if unregisterble_nodes:
-        text += '<a href="unregister_node://all_selected_nodes">unregister [%d]</a>'%len(unregisterble_nodes)
-      if restartable_nodes:
-        text += '<br><a href="start_node_at_host://all_selected_nodes">start@host [%d]</a>'%len(restartable_nodes)
-
-    if (self.__last_info_type == 'Node' and self.__last_info_text != text) or force_emit:
-      self.__last_info_text = text
-      self.description_signal.emit(name, text)
-    self.updateButtons()
+#      text += '<dt><a href="copy_log_path://%s">copy log path to clipboard</a></dt>'%node.name
+    return text
 
   def on_topic_selection_changed(self, selected, deselected, force_emit=False, topic_name=''):
     '''
     updates the Buttons, create a description and emit L{description_signal} to
     show the description of selected topic
     '''
+    selectedTopics = []
     if topic_name and not self.master_info is None:
       selectedTopics = [self.master_info.getTopic("%s"%topic_name)]
-      if selectedTopics[0] is None:
+      if len(selectedTopics) == 0:
         return
     else:
       if self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()) != 'Topics':
@@ -1337,14 +1355,31 @@ class MasterViewProxy(QtGui.QWidget):
       self.masterTab.pubStopTopicButton.setEnabled(topics_selected)
     if len(selectedTopics) == 1:
       topic = selectedTopics[0]
+      text = self.get_topic_description(topic_name, topic)
+      info_text = '<div>%s</div>'%text
+      if (self.__last_info_type == 'Topic' and self.__last_info_text != info_text) or force_emit:
+        self.__last_info_text = info_text
+        self.description_signal.emit(topic.name, info_text)
+
+  def get_topic_description(self, topic_name, topic=None):
+    text = ''
+    if topic is None:
+      selectedTopics = []
+      if topic_name and not self.master_info is None:
+        selectedTopics = [self.master_info.getTopic("%s"%topic_name)]
+      else:
+        selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
+      if len(selectedTopics) == 1:
+        topic = selectedTopics[0]
+    if topic is not None:
       ns, sep, name = topic.name.rpartition(rospy.names.SEP)
       text = '<font size="+1"><b><span style="color:gray;">%s%s</span><b>%s</b></font><br>'%(ns, sep, name)
-      text += '<a href="topicecho://%s%s">echo</a>'%(self.mastername, topic.name)
-      text += '- <a href="topichz://%s%s">hz</a>'%(self.mastername, topic.name)
-      text += '- <a href="topichzssh://%s%s">sshhz</a>'%(self.mastername, topic.name)
-      text += '- <a href="topicpub://%s%s">pub</a>'%(self.mastername, topic.name)
+      text += '&nbsp;<a href="topicecho://%s%s" title="Show the content of the topic"><img src=":icons/sekkyumu_topic_echo_24.png" alt="echo"></a>'%(self.mastername, topic.name)
+      text += '&nbsp;<a href="topichz://%s%s" title="Show only the receive rate of the topic.<br>All data is sent through the network"><img src=":icons/sekkyumu_topic_hz_24.png" alt="hz"></a>'%(self.mastername, topic.name)
+      text += '&nbsp;<a href="topichzssh://%s%s" title="Show only the receive rate of the topic.<br>Uses an SSH connection to execute `rostopic hz` on remote host."><img src=":icons/sekkyumu_topic_echo_ssh_hz_24.png" alt="sshhz"></a>'%(self.mastername, topic.name)
+      text += '&nbsp;<a href="topicpub://%s%s" title="Start a publisher for selected topic"><img src=":icons/sekkyumu_topic_pub_24.png" alt="pub"></a>'%(self.mastername, topic.name)
       if topic.name in self.__republish_params:
-        text += '- <a href="topicrepub://%s%s">repub</a>'%(self.mastername, topic.name)
+        text += '&nbsp;<a href="topicrepub://%s%s" title="Start a publisher with last parameters"><img src=":icons/sekkyumu_topic_repub_24.png" alt="repub"></a>'%(self.mastername, topic.name)
       topic_publisher = []
       topic_prefix = '/rostopic_pub%s_'%topic.name
       node_names = self.master_info.node_names
@@ -1352,7 +1387,7 @@ class MasterViewProxy(QtGui.QWidget):
         if n.startswith(topic_prefix):
           topic_publisher.append(n)
       if topic_publisher:
-        text += '- <a href="topicstop://%s%s">stop [%d]</a>'%(self.mastername, topic.name, len(topic_publisher))
+        text += '&nbsp;<a href="topicstop://%s%s"><img src=":icons/sekkyumu_topic_pub_stop_24.png" alt="stop"> [%d]</a>'%(self.mastername, topic.name, len(topic_publisher))
       text += '<p>'
       text += self._create_html_list('Publisher:', topic.publisherNodes, 'NODE')
       text += self._create_html_list('Subscriber:', topic.subscriberNodes, 'NODE')
@@ -1388,10 +1423,7 @@ class MasterViewProxy(QtGui.QWidget):
       except ValueError:
         pass
       text += '</dl>'
-      info_text = '<div>%s</div>'%text
-      if (self.__last_info_type == 'Topic' and self.__last_info_text != info_text) or force_emit:
-        self.__last_info_text = info_text
-        self.description_signal.emit(topic.name, info_text)
+    return text
 
   def _href_from_msgtype(self, msg_type):
     result = msg_type
@@ -1419,7 +1451,7 @@ class MasterViewProxy(QtGui.QWidget):
       service = selectedServices[0]
       ns, sep, name = service.name.rpartition(rospy.names.SEP)
       text = '<font size="+1"><b><span style="color:gray;">%s%s</span><b>%s</b></font><br>'%(ns, sep, name)
-      text += '<a href="servicecall://%s%s">call</a>'%(self.mastername, service.name)
+      text += '<a href="servicecall://%s%s" title="call service"><img src=":icons/sekkyumu_call_service_24.png" alt="call"></a>'%(self.mastername, service.name)
       text += '<dl>'
       text += '<dt><b>URI</b>: %s</dt>'%service.uri
       text += '<dt><b>ORG.MASTERURI</b>: %s</dt>'%service.masteruri
@@ -1536,21 +1568,33 @@ class MasterViewProxy(QtGui.QWidget):
     Starts the selected nodes. If for a node more then one configuration is 
     available, the selection dialog will be show.
     '''
-    key_mod = QtGui.QApplication.keyboardModifiers()
-    if (key_mod & QtCore.Qt.ShiftModifier or key_mod & QtCore.Qt.ControlModifier):
-      self.masterTab.startButton.showMenu()
-    else:
-      cursor = self.cursor()
-      self.masterTab.startButton.setEnabled(False)
-      self.setCursor(QtCore.Qt.WaitCursor)
-      try:
-        selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-        self.start_nodes(selectedNodes)
-      finally:
-        self.setCursor(cursor)
-        self.masterTab.startButton.setEnabled(True)
+#     key_mod = QtGui.QApplication.keyboardModifiers()
+#     if (key_mod & QtCore.Qt.ShiftModifier or key_mod & QtCore.Qt.ControlModifier):
+#       self.masterTab.startButton.showMenu()
+#     else:
+    cursor = self.cursor()
+    self.masterTab.startButton.setEnabled(False)
+    self.setCursor(QtCore.Qt.WaitCursor)
+    try:
+      selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+      self.start_nodes(selectedNodes)
+    finally:
+      self.setCursor(cursor)
+      self.masterTab.startButton.setEnabled(True)
 
-  def start_node(self, node, force, config, force_host=None):
+  def on_start_alt_clicked(self):
+    '''
+    Starts the selected nodes with additional options.
+    '''
+    cursor = self.cursor()
+    self.setCursor(QtCore.Qt.WaitCursor)
+    try:
+      selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+      self.start_nodes(selectedNodes, use_adv_cfg=True)
+    finally:
+      self.setCursor(cursor)
+
+  def start_node(self, node, force, config, force_host=None, logging=None):
 
     if node is None:
         raise DetailedError("Start error", 'None is not valid node name!') 
@@ -1561,7 +1605,7 @@ class MasterViewProxy(QtGui.QWidget):
                           'Error while start %s:\nNo configuration found!'%node.name)
       if isinstance(config, LaunchConfig):
         try:
-          nm.starter().runNode(node.name, config, force_host, self.masteruri, user=self.current_user)
+          nm.starter().runNode(AdvRunCfg(node.name, config, force_host, self.masteruri, logging=logging, user=self.current_user))
         except socket.error as se:
           rospy.logwarn("Error while start '%s': %s\n\n Start canceled!", node.name, str(se))
           raise DetailedError("Start error",
@@ -1588,7 +1632,7 @@ class MasterViewProxy(QtGui.QWidget):
                               'Error while call a service of node %s [%s]'%(node.name, self.master_info.getService(config).uri),
                               '%s'%e)
 
-  def start_nodes(self, nodes, force=False, force_host=None):
+  def start_nodes(self, nodes, force=False, force_host=None, use_adv_cfg=False):
     '''
     Internal method to start a list with nodes
     @param nodes: the list with nodes to start
@@ -1600,6 +1644,7 @@ class MasterViewProxy(QtGui.QWidget):
     '''
     cfg_choices = dict()
     cfg_nodes = dict()
+    has_launch_files = False
     for node in nodes:
       # do not start node, if it is in ingnore list and multiple nodes are selected
       if (node.pid is None or (not node.pid is None and force)) and not node.is_ghost:
@@ -1619,6 +1664,8 @@ class MasterViewProxy(QtGui.QWidget):
             if not choice is None:
               cfg_choices[choises_str] = choices[choice]
               cfg_nodes[node.name] = choices[choice]
+              if isinstance(choices[choice], LaunchConfig):
+                has_launch_files = True
             elif ok:
               WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
                                 'Error while start %s:\nNo configuration selected!'%node.name).exec_()
@@ -1627,13 +1674,44 @@ class MasterViewProxy(QtGui.QWidget):
           else:
             cfg_nodes[node.name] = cfg_choices[choises_str]
 
-    # put into the queue and start
-    for node in nodes:
-      if node.name in cfg_nodes:
-        self._progress_queue.add2queue(str(uuid.uuid4()), 
-                                       ''.join(['start ', node.node_info.name]), 
-                                       self.start_node, 
-                                       (node.node_info, force, cfg_nodes[node.node_info.name], force_host))
+    # get the advanced configuration
+    logging = None
+    diag_canceled = False
+    if use_adv_cfg and has_launch_files:
+      log_params = {'Level' : ('string', nm.settings().logging.get_alternatives('loglevel')),
+                    'Level (roscpp)' : ('string', nm.settings().logging.get_alternatives('loglevel_roscpp')),
+                    'Level (super)' : ('string', nm.settings().logging.get_alternatives('loglevel_superdebug')),
+                    'Format' : ('string', nm.settings().logging.get_alternatives('console_format'))
+                    }
+      params = {'Logging' : ('dict', log_params)}
+      dia = ParameterDialog(params)
+      dia.setFilterVisible(False)
+      dia.setWindowTitle('Start with parameters')
+      dia.resize(480,120)
+      dia.setFocusField('Level')
+      diag_canceled = not dia.exec_()
+      if not diag_canceled:
+        try:
+          params = dia.getKeywords()
+          nm.settings().logging.loglevel = params['Logging']['Level']
+          nm.settings().logging.loglevel_roscpp = params['Logging']['Level (roscpp)']
+          nm.settings().logging.loglevel_superdebug = params['Logging']['Level (super)']
+          nm.settings().logging.console_format = params['Logging']['Format']
+          nm.settings().store_logging()
+          logging = nm.settings().logging
+        except Exception, e:
+          diag_canceled = True
+          WarningMessageBox(QtGui.QMessageBox.Warning, "Get advanced start parameter",
+                            'Error while parse parameter',
+                            str(e)).exec_()
+    if not diag_canceled:
+      # put into the queue and start
+      for node in nodes:
+        if node.name in cfg_nodes:
+          self._progress_queue.add2queue(str(uuid.uuid4()),
+                                         ''.join(['start ', node.node_info.name]),
+                                         self.start_node,
+                                         (node.node_info, force, cfg_nodes[node.node_info.name], force_host, logging))
     self._progress_queue.start()
 
   def start_nodes_by_name(self, nodes, cfg, force=False):
@@ -2052,7 +2130,7 @@ class MasterViewProxy(QtGui.QWidget):
       nodenames.append(n.name)
     try:
       host = nm.nameres().getHostname(self.masteruri)
-      path_on_host = nm.starter().copylogPath2Clipboards(host, nodenames, True)
+      path_on_host = nm.starter().get_log_path(host, nodenames, True)
       QtGui.QApplication.clipboard().setText(''.join([getpass.getuser() if self.is_local else self.current_user, '@', host, ':', path_on_host]))
     except Exception as e:
       WarningMessageBox(QtGui.QMessageBox.Warning, "Get log path", 
@@ -2060,7 +2138,7 @@ class MasterViewProxy(QtGui.QWidget):
                         str(e)).exec_()
 #    self._progress_queue.add2queue(str(uuid.uuid4()),
 #                                   'Get log path',
-#                                   nm.starter().copylogPath2Clipboards,
+#                                   nm.starter().get_log_path,
 #                                   (nm.nameres().getHostname(self.masteruri), nodenames))
 #    self._progress_queue.start()
 
@@ -2488,12 +2566,13 @@ class MasterViewProxy(QtGui.QWidget):
     ns = '/'
     if selectedParameter:
       ns = roslib.names.namespace(selectedParameter[0][0])
-    fields = {'name' : ('string', ['', ns]), 'type' : ('string', ['string', 'int', 'float', 'bool', 'list']), 'value': ('string', '')}
+    fields = {'name' : ('string', ns), 'type' : ('string', ['string', 'int', 'float', 'bool', 'list']), 'value': ('string', '')}
     newparamDia = ParameterDialog(fields, parent=self)
     newparamDia.setWindowTitle('Add new parameter')
     newparamDia.setFilterVisible(False)
-    newparamDia.resize(300, 140)
+    newparamDia.resize(400, 120)
     newparamDia.accepted.connect(self._on_add_parameter_accepted)
+    newparamDia.setFocusField('name')
     newparamDia.show()
     newparamDia.raise_()
     newparamDia.activateWindow()
