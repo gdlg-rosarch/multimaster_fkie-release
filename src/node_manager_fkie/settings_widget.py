@@ -156,7 +156,7 @@ class SettingsWidget(QtGui.QDockWidget):
                                       'reduce the network load. If autoupdate is deactivated '
                                       'you must refresh the state manually.</p>'
                                    },)
-                }
+               }
     self.settings_model.init_settings(settings)
 #    self.settingsTreeView.setSortingEnabled(True)
     self.settingsTreeView.sortByColumn(0, QtCore.Qt.AscendingOrder)
@@ -196,6 +196,14 @@ class ItemDelegate(QtGui.QStyledItemDelegate):
       editor = PathEditor(item.value(), parent)
       editor.editing_finished_signal.connect(self.edit_finished)
       return editor
+    elif item.edit_type() == SettingsValueItem.EDIT_TYPE_LIST:
+      box = QtGui.QComboBox(parent)
+      box.addItems(item.value_list())
+      index = box.findText(item.value())
+      if index >= 0:
+        box.setCurrentIndex(index)
+      box.setEditable(False)
+      return box
     return QtGui.QStyledItemDelegate.createEditor(self, parent, option, index)
 
 #  def setEditorData(self, editor, index):
