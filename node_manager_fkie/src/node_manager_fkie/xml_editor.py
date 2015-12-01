@@ -36,14 +36,14 @@ from python_qt_binding import QtCore
 
 import roslib
 import rospy
-from xml_highlighter import XmlHighlighter
-from yaml_highlighter import YamlHighlighter
-from detailed_msg_box import WarningMessageBox
+from node_manager_fkie.xml_highlighter import XmlHighlighter
+from node_manager_fkie.yaml_highlighter import YamlHighlighter
+from node_manager_fkie.detailed_msg_box import WarningMessageBox
 
 import node_manager_fkie as nm
 from master_discovery_fkie.common import resolve_url
-from common import package_name
-from run_dialog import PackageDialog
+from node_manager_fkie.common import package_name
+from node_manager_fkie.run_dialog import PackageDialog
 
 class Editor(QtGui.QTextEdit):
   '''
@@ -325,6 +325,8 @@ class Editor(QtGui.QTextEdit):
     if event.key() == QtCore.Qt.Key_Control or event.key() == QtCore.Qt.Key_Shift:
       self.setMouseTracking(True)
     if event.modifiers() == QtCore.Qt.ControlModifier and event.key() == QtCore.Qt.Key_7:
+      self.commentText()
+    if event.modifiers() == QtCore.Qt.ControlModifier|QtCore.Qt.ShiftModifier and event.key() == QtCore.Qt.Key_Slash:
       self.commentText()
     elif event.modifiers() == QtCore.Qt.AltModifier and event.key() == QtCore.Qt.Key_Space:
       ext = os.path.splitext(self.filename)
@@ -858,7 +860,7 @@ class XmlEditor(QtGui.QDialog):
       rospy.logwarn("Error while open %s: %s", filename, traceback.format_exc(1))
     self.tabWidget.setUpdatesEnabled(True)
     if search_text:
-      if self.find(search_text, False):
+      if self.find(search_text, False, exclude_xml_comments=True):
         if not self.find_dialog.search_pos.isNull():
           self.tabWidget.currentWidget().moveCursor(QtGui.QTextCursor.StartOfLine)
 
@@ -968,6 +970,8 @@ class XmlEditor(QtGui.QDialog):
     self.find_dialog.show()
     self.find_dialog.raise_()
     self.find_dialog.activateWindow()
+    self.find_dialog.search_field.setFocus()
+    self.find_dialog.search_field.selectAll()
 
   def on_shortcut_goto(self):
     '''
@@ -996,7 +1000,7 @@ class XmlEditor(QtGui.QDialog):
   def __getTabName(self, lfile):
     base = os.path.basename(lfile).replace('.launch', '')
     (package, _) = package_name(os.path.dirname(lfile))
-    return ''.join([str(base), ' [', str(package),']'])
+    return '%s[%s]'%(base, package)
 
   def on_find_dialog_clicked(self, button):
     '''
@@ -1014,15 +1018,18 @@ class XmlEditor(QtGui.QDialog):
         self.tabWidget.currentWidget().setTextCursor(cursor)
       self.find(self.find_dialog.search_field.text(), self.find_dialog.recursive.isChecked())
 
-  def find(self, search_text, recursive):
+  def find(self, search_text, recursive, exclude_xml_comments=False):
     '''
-    Searches for text in the current text editor. If `recursive` is C{True}, 
+    Searches for text in the current text editor. If `recursive` is C{True},
     the included files will be searched.
     @param search_text: text to find
     @type search_text: C{str}
     @param recursive: search in included files if this is C{True}
     @type recursive: C{bool}
+    @param exclude_xml_comments: ignore search results in xml comments if this is C{False}
+    @type exclude_xml_comments: C{bool}
     '''
+    self.find_dialog.search_field.setText(search_text)
     found = False
     if self.find_dialog.search_text != search_text:
       self.find_dialog.search_pos = QtGui.QTextCursor()
@@ -1032,7 +1039,7 @@ class XmlEditor(QtGui.QDialog):
     self.find_dialog.search_text = search_text
     if search_text:
       if recursive:
-        files = self.tabWidget.currentWidget().fileWithText(search_text)
+        files = self.tabWidget.currentWidget().fileWithText(search_text) # TODO: add 'exclude_xml_comments'
         items = list(set(files))
         self.find_dialog.result_label.setText(''.join(["'", search_text, "'", ' found in ', str(len(items)), ' files:']))
         self.find_dialog.found_files.clear()
@@ -1041,19 +1048,33 @@ class XmlEditor(QtGui.QDialog):
 #        self.find_dialog.resize(self.find_dialog.found_files.contentsSize())
         found = True
       else:
-        tmp_pos = self.find_dialog.search_pos
-        self.find_dialog.search_pos = self.tabWidget.currentWidget().document().find(search_text, self.find_dialog.search_pos.position()+1)
-        if self.find_dialog.search_pos.isNull() and not tmp_pos.isNull():
+        search_next = True
+        while search_next:
+          search_next = False
+          tmp_pos = self.find_dialog.search_pos
           self.find_dialog.search_pos = self.tabWidget.currentWidget().document().find(search_text, self.find_dialog.search_pos.position()+1)
-          # do recursive search
-        if not self.find_dialog.search_pos.isNull():
-          self.tabWidget.currentWidget().setTextCursor(self.find_dialog.search_pos)
-          currentTabName = self.tabWidget.tabText(self.tabWidget.currentIndex())
-          currentLine = str(self.tabWidget.currentWidget().textCursor().blockNumber()+1)
-          self.find_dialog.result_label.setText(''.join(["'", search_text, "'", ' found at line: ', currentLine, ' in ', "'", currentTabName,"'"]))
-          found = True
-        else:
-          self.find_dialog.result_label.setText(''.join(["'", search_text, "'", ' not found!']))
+          if self.find_dialog.search_pos.isNull() and not tmp_pos.isNull():
+            self.find_dialog.search_pos = self.tabWidget.currentWidget().document().find(search_text, self.find_dialog.search_pos.position()+1)
+            # do recursive search
+          if not self.find_dialog.search_pos.isNull():
+            # skip the results, which are in XML comments
+            is_commented = False
+            if exclude_xml_comments:
+              comment_start = self.tabWidget.currentWidget().document().find('<!--', self.find_dialog.search_pos, QtGui.QTextDocument.FindBackward)
+              if not comment_start.isNull():
+                comment_end = self.tabWidget.currentWidget().document().find('-->', comment_start)
+                if not comment_end.isNull() and comment_end > self.find_dialog.search_pos:
+                  is_commented = True
+                  search_next = True
+            # register text found
+            if not is_commented:
+              self.tabWidget.currentWidget().setTextCursor(self.find_dialog.search_pos)
+              currentTabName = self.tabWidget.tabText(self.tabWidget.currentIndex())
+              currentLine = str(self.tabWidget.currentWidget().textCursor().blockNumber()+1)
+              self.find_dialog.result_label.setText(''.join(["'", search_text, "'", ' found at line: ', currentLine, ' in ', "'", currentTabName,"'"]))
+              found = True
+          else:
+            self.find_dialog.result_label.setText(''.join(["'", search_text, "'", ' not found!']))
     return found
 
   def find_dialog_itemActivated(self, item):
