@@ -30,199 +30,205 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from threading import RLock
+from threading import Thread, RLock
+import socket
+import rospy
+
+RESOLVE_CACHE = {}  # hostname : address
 
 class MasterEntry(object):
-  
-  def __init__(self, masteruri=None, mastername=None, address=None, hostname=None):
+
+  def __init__(self, masteruri=None, mastername=None, address=None):
     self.masteruri = masteruri
-    self._masternames = [mastername] if mastername else []
-    self._hostnames = [hostname] if hostname else []
-    self._addresses = [address] if address else []
-    
+    self._masternames = []
+    self.add_mastername(mastername)
+    self.mutex = RLock()
+    # addresses: hostname (at first place if available), IPv4 or IPv6
+    self._addresses = []
+    self.add_address(address)
+
   def __repr__(self):
     return ''.join([str(self.masteruri), ':\n',
                    '  masternames: ', str(self._masternames), '\n',
-                   '  hostnames: ', str(self._hostnames), '\n',
                    '  addresses: ', str(self._addresses), '\n'])
-  
-  def hasMastername(self, mastername):
-    if mastername in self._masternames:
-      return True
-    return False
 
-  def hasHostname(self, hostname):
-    if hostname in self._hostnames:
-      return True
-    return False
+  def entry(self):
+    return (self.masteruri, list(self._masternames), list(self._addresses))
 
-  def hasAddress(self, address):
-    if address in self._addresses:
-      return True
-    return False
+  def has_mastername(self, mastername):
+    return mastername in self._masternames
 
-  def addMastername(self, mastername):
-    if mastername and not self.hasMastername(mastername):
+  def has_address(self, address):
+    with self.mutex:
+      return address in self._addresses
+
+  def add_mastername(self, mastername):
+    if mastername and mastername not in self._masternames:
       self._masternames.append(mastername)
 
-  def addHostname(self, hostname):
-    if hostname and not self.hasHostname(hostname):
-      self._hostnames.append(hostname)
+  def add_address(self, address):
+    if address and not self.has_address(address):
+      if self.is_legal_ip(address):
+        # it is an IP, try to get the hostname
+        with self.mutex:
+          self._addresses.append(address)
+        # resolve the name in a thread
+        thread = Thread(target=self._get_hostname, args=((address,)))
+        thread.daemon = True
+        thread.start()
+      else:
+        # it is a hostname: add at the fist place and try to get an IP for this host
+        with self.mutex:
+          self._addresses.insert(0, address)
+        # resolve the name in a thread
+        thread = Thread(target=self._get_address, args=((address,)))
+        thread.daemon = True
+        thread.start()
 
-  def addAddress(self, address):
-    if address and not self.hasAddress(address):
-      self._addresses.append(address)
-      
-  def getMastername(self):
-    if len(self._masternames) > 0:
+  @classmethod
+  def is_legal_ip(cls, addr):
+    result = False
+    try:
+      socket.inet_pton(socket.AF_INET, addr)
+      # ok, it is a legal IPv4 address
+      result = True
+    except socket.error:
+      # try for IPv6
+      try:
+        socket.inet_pton(socket.AF_INET6, addr)
+        # ok, it is a legal IPv6 address
+        result = True
+      except socket.error:
+        # not legal IP address
+        pass
+    return result
+
+  def _get_address(self, hostname):
+    try:
+      (_, _, ipaddrlist) = socket.gethostbyaddr(hostname)
+      with self.mutex:
+        if ipaddrlist:
+          RESOLVE_CACHE[hostname] = ipaddrlist
+          for addr in ipaddrlist:
+            if not self.has_address(addr):
+              self._addresses.append(addr)
+    except socket.gaierror:
+      # no suitable address found
+      pass
+
+  def _get_hostname(self, address):
+    try:
+      (hostname, _, _) = socket.gethostbyaddr(address)
+      with self.mutex:
+        name_splitted = hostname.split('.')
+        RESOLVE_CACHE[address] = [name_splitted[0], hostname]
+        if not self.has_address(hostname):
+          self._addresses.insert(0, hostname)
+        if not self.has_address(name_splitted[0]):
+          self._addresses.insert(0, name_splitted[0])
+    except socket.gaierror:
+      # no suitable address found
+      pass
+
+  def get_mastername(self):
+    try:
       return self._masternames[0]
-    return None
-  
-  def getMasternames(self):
+    except:
+      return None
+
+  def get_masternames(self):
     return list(self._masternames)
 
-  def getAddress(self):
-    if len(self._addresses) > 0:
-      return self._addresses[0]
-    return None
-
-  def getHostname(self):
-    if len(self._hostnames) > 0:
-      return self._hostnames[0]
-    return None
-
-  def removeExtMastername(self, mastername):
-    if len(self._masternames) > 1:
+  def get_address(self):
+    with self.mutex:
       try:
-        self._masternames.remove(mastername)
+        return self._addresses[0]
       except:
-        pass
+        return None
 
-  def removeExtHostname(self, hostname):
-    if len(self._hostnames) > 1:
-      try:
-        self._hostnames.remove(hostname)
-      except:
-        pass
+  def addresses(self):
+    return list(self._addresses)
 
-  def removeExtAddress(self, address):
-    if len(self._addresses) > 1:
-      try:
-        self._addresses.remove(address)
-      except:
-        pass
+  def remove_mastername(self, mastername):
+    try:
+      self._masternames.remove(mastername)
+    except:
+      pass
 
+  def remove_address(self, address):
+    try:
+      self._addresses.remove(address)
+    except:
+      pass
 
 class NameResolution(object):
   '''
   This class stores the association between master URI, master name and 
   host name or IP. Both the setter and the getter methods are thread safe.
   '''
-  
+
   def __init__(self):
     self.mutex = RLock()
     self._masters = [] #sets with masters
     self._hosts = [] #sets with hosts
     self._address = [] # avoid the mixing of ip and name as address
-  
-  def removeMasterEntry(self, masteruri):
+
+  def remove_master_entry(self, masteruri):
     with self.mutex:
       for m in self._masters:
         if masteruri and m.masteruri == masteruri:
           self._masters.remove(m)
           return
 
-  def removeInfo(self, mastername, hostname):
+  def remove_info(self, mastername, address):
     with self.mutex:
       for m in self._masters:
-        if m.hasMastername(mastername) and (m.hasHostname(hostname) or m.hasAddress(hostname)):
-          m.removeExtMastername(mastername)
-          m.removeExtHostname(hostname)
-          m.removeExtAddress(hostname)
+        if m.has_mastername(mastername) and m.has_address(address):
+          m.remove_mastername(mastername)
+          m.remove_address(address)
           return
 
-#  def remove(self, name=None, masteruri=None, host=None):
-#    '''
-#    Remove an association. If one of the given parameter found in the association,
-#    the association will be removed from the name resolution list.
-#    @param name: the name of the ROS master.
-#    @type name: C{str} (Default: C{None}) 
-#    @param masteruri: the URI of the ROS master.
-#    @type masteruri: C{str} (Default: C{None}) 
-#    @param host: the host name or IP
-#    @type host: C{str} (Default: C{None}) 
-#    '''
-#    try:
-#      self.mutex.acquire()
-#      for s in list(self._masters):
-#        if (name, 'name') in s or (masteruri, 'uri') in s or (host, 'host') in s:
-#          try:
-#            s.remove((name, 'name'))
-#          except:
-#            pass
-#          try:
-#            s.remove((masteruri, 'uri'))
-#          except:
-#            pass
-#          try:
-#            s.remove((host, 'host'))
-#            self._address.remove(host)
-#          except:
-#            pass
-#          if len(s) < 2:
-#            self._masters.remove(s)
-#    finally:
-#      self.mutex.release()
-
-  def addMasterEntry(self, masteruri, mastername, address, hostname=None):
+  def add_master_entry(self, masteruri, mastername, address):
     with self.mutex:
-      mastername = self._validateMastername(mastername, masteruri)
+      mastername = self._validate_mastername(mastername, masteruri)
       for m in self._masters:
         if m.masteruri and m.masteruri == masteruri:
-          m.addMastername(mastername)
-          m.addHostname(hostname)
-          m.addAddress(address)
+          m.add_mastername(mastername)
+          m.add_address(address)
           return
-        elif m.masteruri is None and m.hasMastername(mastername):
+        elif m.masteruri is None and m.has_mastername(mastername):
           m.masteruri = masteruri
-          m.addMastername(mastername)
-          m.addHostname(hostname)
-          m.addAddress(address)
+          m.add_mastername(mastername)
+          m.add_address(address)
           return
-      self._masters.append(MasterEntry(masteruri, mastername, address, hostname))
+      self._masters.append(MasterEntry(masteruri, mastername, address))
 
-  def addInfo(self, mastername, address, hostname=None):
+  def add_info(self, mastername, address):
     with self.mutex:
-#      mastername = self._validateMastername(mastername)
       for m in self._masters:
-        if m.hasMastername(mastername):
-          m.addMastername(mastername)
-          m.addHostname(hostname)
-          m.addAddress(address)
+        if m.has_mastername(mastername):
+          m.add_mastername(mastername)
+          m.add_address(address)
           return
-        elif mastername is None:
-          if m.hasHostname(hostname) or m.hasAddress(address):
-            m.addHostname(hostname)
-            m.addAddress(address)
       if not mastername is None:
-        self._masters.append(MasterEntry(None, mastername, address, hostname))
+        self._masters.append(MasterEntry(None, mastername, address))
 
-  def _validateMastername(self, mastername, masteruri):
+  def _validate_mastername(self, mastername, masteruri):
     '''
     Not thead safe
     '''
-#    with self.mutex:
     mm = self.masteruri(mastername)
     if mm and mm != masteruri:
-      print "EROROR name", mastername, "bereits fuer", mm, "vergeben!"
       nr = 2
+      new_name = '%s_%d' % (mastername, nr)
       while mm and mm != masteruri:
-        mm = self.masteruri('_'.join([mastername, str(nr)]))
+        new_name = '%s_%d' % (mastername, nr)
         nr = nr + 1
-      return '_'.join([mastername, str(nr)])
+      rospy.logwarn("master name '%s' is already assigned to '%s', rename to '%s'"(mastername, mm, new_name))
+      return new_name
     return mastername
 
-  def hasMaster(self, masteruri):
+  def has_master(self, masteruri):
     with self.mutex:
       for m in self._masters:
         if m.masteruri == masteruri:
@@ -234,61 +240,84 @@ class NameResolution(object):
       for m in self._masters:
         if m.masteruri == masteruri:
           if not address is None:
-            if m.hasAddress(address):
-              return m.getMastername()
+            if m.has_address(address):
+              return m.get_mastername()
           else:
-            return m.getMastername()
+            return m.get_mastername()
       return None
 
   def masternames(self, masteruri):
     with self.mutex:
       for m in self._masters:
         if m.masteruri == masteruri:
-          return m.getMasternames()
+          return m.get_masternames()
       return list()
 
-  def masternameByAddress(self, address):
+  def masternamebyaddr(self, address):
     with self.mutex:
       for m in self._masters:
-        if m.hasAddress(address):
-          return m.getMastername()
+        if m.has_address(address):
+          return m.get_mastername()
       return None
 
   def masteruri(self, mastername):
     with self.mutex:
       for m in self._masters:
-        if m.hasMastername(mastername):
+        if m.has_mastername(mastername):
           return m.masteruri
       return None
 
-  def masterurisByHost(self, hostname):
+  def masterurisbyaddr(self, address):
     with self.mutex:
       result = []
       for m in self._masters:
-        if m.hasHostname(hostname) and m.masteruri and not m.masteruri in result:
+        if m.has_address(address) and m.masteruri and not m.masteruri in result:
           result.append(m.masteruri)
       return result
 
   def address(self, masteruri):
     with self.mutex:
       for m in self._masters:
-        if m.masteruri == masteruri or m.hasHostname(masteruri) or m.hasMastername(masteruri):
-          return m.getAddress()
+        if m.masteruri == masteruri or m.has_mastername(masteruri):
+          return m.get_address()
       return None
 
-  def hostname(self, address):
+  def addresses(self, masteruri):
     with self.mutex:
       for m in self._masters:
-        if m.hasAddress(address) or m.hasMastername(address):
-          result = m.getHostname()
-          return result if result else address
-      return address
+        if m.masteruri == masteruri or m.has_mastername(masteruri):
+          return m.addresses()
+      return []
+
+  def hostname(self, address, resolve=False):
+    with self.mutex:
+      for m in self._masters:
+        if m.has_address(address) or m.has_mastername(address):
+          result = m.get_address()
+          if result and not MasterEntry.is_legal_ip(result):
+            return result
+          else:
+            break
+    if MasterEntry.is_legal_ip(address):
+      try:
+        (hostname, _, _) = socket.gethostbyaddr(address)
+        return hostname
+      except:
+        pass
+    return address
+
+  def resolve_cached(self, hostname):
+    try:
+      return RESOLVE_CACHE[hostname]
+    except:
+      pass
+    return [hostname]
 
   @classmethod
   def getHostname(cls, url):
     '''
     Returns the host name used in a url
-    
+
     @return: host or None if url is invalid
     @rtype:  C{str}
     '''
@@ -297,4 +326,3 @@ class NameResolution(object):
     from urlparse import urlparse
     o = urlparse(url)
     return o.hostname
- 
