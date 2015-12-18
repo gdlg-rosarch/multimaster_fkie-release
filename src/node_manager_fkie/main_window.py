@@ -109,6 +109,7 @@ class MainWindow(QtGui.QMainWindow):
     self._changed_files = dict()
     self._changed_binaries = dict()
     self._changed_files_param = dict()
+    self._syncs_to_start = []  # hostnames
     #self.setAttribute(QtCore.Qt.WA_AlwaysShowToolTips, True)
     # setup main window frame
     self.setObjectName('MainWindow')
@@ -172,10 +173,13 @@ class MainWindow(QtGui.QMainWindow):
 
     # initialize the view for the discovered ROS master
     self.master_model = MasterModel(self.getMasteruri())
+    self.master_model.sync_start.connect(self.on_sync_start)
+    self.master_model.sync_stop.connect(self.on_sync_stop)
     self.masterTableView.setModel(self.master_model)
+    self.master_model.parent_view = self.masterTableView
 #    self.masterTableView.setAlternatingRowColors(True)
-    self.masterTableView.clicked.connect(self.on_master_table_clicked)
-    self.masterTableView.pressed.connect(self.on_master_table_pressed)
+#    self.masterTableView.clicked.connect(self.on_master_table_clicked)
+#    self.masterTableView.pressed.connect(self.on_master_table_pressed)
     self.masterTableView.activated.connect(self.on_master_table_activated)
     sm = self.masterTableView.selectionModel()
     sm.currentRowChanged.connect(self.on_masterTableView_selection_changed)
@@ -428,6 +432,9 @@ class MainWindow(QtGui.QMainWindow):
     self.close()
 
   def _stop_updating(self):
+    if hasattr(self, "_discover_dialog") and self._discover_dialog is not None:
+      self._discover_dialog.stop()
+    self.masterlist_service.stop();
     self._progress_queue.stop()
     self._progress_queue_sync.stop()
     self._update_handler.stop()
@@ -568,8 +575,7 @@ class MainWindow(QtGui.QMainWindow):
         result_1 = self.state_topic.registerByROS(self.getMasteruri(), False)
         result_2 = self.stats_topic.registerByROS(self.getMasteruri(), False)
         self.masterlist_service.retrieveMasterList(self.getMasteruri(), False)
-        if not result_1 or not result_2:
-          self._setLocalMonitoring(True)
+        self._setLocalMonitoring(not result_1 or not result_2)
       except:
         pass
     else:
@@ -589,6 +595,7 @@ class MainWindow(QtGui.QMainWindow):
       self.masterTableView.setToolTip("use 'Start' button to enable the master discovering")
     else:
       self.masterTableView.setToolTip('')
+      self.networkDock.setWindowTitle("ROS Network [disabled]")
     if on:
       # remove discovered ROS master and set the local master to selected
       for uri in self.masters.keys():
@@ -601,8 +608,23 @@ class MainWindow(QtGui.QMainWindow):
             self.master_model.removeMaster(master.master_state.name)
           self.removeMaster(uri)
 #      self.masterTableView.doItemsLayout()
-
-
+    else:
+      try:
+        # determine the ROS network ID
+        mcast_group = rospy.get_param('/master_discovery/mcast_port')
+        self.networkDock.setWindowTitle("ROS Network [id: %d]" % (mcast_group - 11511))
+      except:
+        # try to get the multicast port of master discovery from log
+        port = 0
+        import re
+        with open(ScreenHandler.getROSLogFile(node='/master_discovery'), 'r') as mdfile:
+          for line in mdfile:
+            if line.find("Listen for multicast at") > -1:
+              port = map(int, re.findall(r'\d+', line))[-1]
+        if port > 0:
+          self.networkDock.setWindowTitle("ROS Network [id: %d]" % (port - 11511))
+        else:
+          self.networkDock.setWindowTitle("ROS Network")
 
   def on_master_list_err_retrieved(self, masteruri, error):
     '''
@@ -654,7 +676,7 @@ class MainWindow(QtGui.QMainWindow):
     for m in master_list:
       if not m.uri is None:
         host = nm.nameres().getHostname(m.uri)
-        nm.nameres().addMasterEntry(m.uri, m.name, host, host)
+        nm.nameres().add_master_entry(m.uri, m.name, host)
         m.name = nm.nameres().mastername(m.uri)
         master = self.getMaster(m.uri)
         master.master_state = m
@@ -676,14 +698,13 @@ class MainWindow(QtGui.QMainWindow):
     if hasattr(self, "_on_finish"):
       rospy.logdebug("ignore changes on %s, because currently on closing...", msg.master.uri)
       return;
-    host=nm.nameres().getHostname(msg.master.uri)
+    host = nm.nameres().getHostname(msg.master.uri)
     if msg.state == MasterState.STATE_CHANGED:
-      nm.nameres().addMasterEntry(msg.master.uri, msg.master.name, host, host)
+      nm.nameres().add_master_entry(msg.master.uri, msg.master.name, host)
       msg.master.name = nm.nameres().mastername(msg.master.uri)
       self.getMaster(msg.master.uri).master_state = msg.master
       self._assigne_icon(msg.master.name)
       self.master_model.updateMaster(msg.master)
-#      self.masterTableView.doItemsLayout()
       if nm.settings().autoupdate:
         self._update_handler.requestMasterInfo(msg.master.uri, msg.master.monitoruri)
       else:
@@ -692,12 +713,11 @@ class MainWindow(QtGui.QMainWindow):
       # if new master with uri of the local master is received update the master list 
       if msg.master.uri == self.getMasteruri():
         self.masterlist_service.retrieveMasterList(msg.master.uri, False)
-      nm.nameres().addMasterEntry(msg.master.uri, msg.master.name, host, host)
+      nm.nameres().add_master_entry(msg.master.uri, msg.master.name, host)
       msg.master.name = nm.nameres().mastername(msg.master.uri)
       self.getMaster(msg.master.uri).master_state = msg.master
       self._assigne_icon(msg.master.name)
       self.master_model.updateMaster(msg.master)
-#      self.masterTableView.doItemsLayout()
       if nm.settings().autoupdate:
         self._update_handler.requestMasterInfo(msg.master.uri, msg.master.monitoruri)
       else:
@@ -707,10 +727,25 @@ class MainWindow(QtGui.QMainWindow):
         # switch to locale monitoring, if the local master discovering was removed
         self._setLocalMonitoring(True)
       else:
-        nm.nameres().removeMasterEntry(msg.master.uri)
+        nm.nameres().remove_master_entry(msg.master.uri)
         self.master_model.removeMaster(msg.master.name)
-#        self.masterTableView.doItemsLayout()
         self.removeMaster(msg.master.uri)
+    # start master_sync, if it was selected in the start dialog to start with master_dsicovery
+    if self._syncs_to_start:
+      if msg.state in [MasterState.STATE_NEW, MasterState.STATE_CHANGED]:
+        # we don't know which name for host was used to start master discovery
+        if host in self._syncs_to_start:
+          self.on_sync_start(msg.master.uri)
+          self._syncs_to_start.remove(host)
+        elif msg.master.name in self._syncs_to_start:
+          self.on_sync_start(msg.master.uri)
+          self._syncs_to_start.remove(msg.master.name)
+        else:
+          addresses = nm.nameres().addresses(msg.master.uri)
+          for address in addresses:
+            if address in self._syncs_to_start:
+              self.on_sync_start(msg.master.uri)
+              self._syncs_to_start.remove(address)
 #      if len(self.masters) == 0:
 #        self._setLocalMonitoring(True)
     #'print "**on_master_state_changed"
@@ -804,7 +839,7 @@ class MainWindow(QtGui.QMainWindow):
       if self._con_tries[masteruri] > 2:
         self._setLocalMonitoring(True)
     master = self.getMaster(masteruri, False)
-    if master and not master.master_state is None:
+    if master and master.master_state is not None:
       self._update_handler.requestMasterInfo(master.master_state.uri, master.master_state.monitoruri, self.DELAYED_NEXT_REQ_ON_ERR)
 
   def on_conn_stats_updated(self, stats):
@@ -1022,61 +1057,59 @@ class MainWindow(QtGui.QMainWindow):
         master.stop_nodes([sync_node])
     self.syncButton.setEnabled(True)
 
-  def on_sync_released(self, external_call=False):
+  def on_sync_start(self, masteruri=None):
     '''
     Enable or disable the synchronization of the master cores
     '''
     key_mod = QtGui.QApplication.keyboardModifiers()
     if (key_mod & QtCore.Qt.ShiftModifier or key_mod & QtCore.Qt.ControlModifier):
-      if external_call:
-        self.on_sync_dialog_released(external_call=external_call)
-#      else:
-#        self.syncButton.showMenu()
-      if not self.currentMaster.master_info is None:
-        node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
-        self.syncButton.setChecked(not node is None)
+      self.on_sync_dialog_released(masteruri=masteruri, external_call=True)
+#       if not master.master_info is None:
+#         node = master.master_info.getNodeEndsWith('master_sync')
+#         self.syncButton.setChecked(not node is None)
     else:
       self.syncButton.setEnabled(False)
-      if not self.currentMaster is None:
-        if self.syncButton.isChecked():
-          # ask the user to start the master_sync with loaded launch file
-          if not self.currentMaster.master_info is None:
-            node = self.currentMaster.getNode('/master_sync')
-            if node and node[0].has_configs():
-              def_cfg_info = '\nNote: default_cfg parameter will be changed!' if node[0].has_default_cfgs(node[0].cfgs) else ''
-              ret = QtGui.QMessageBox.question(self, 'Start synchronization','Start the synchronization using loaded configuration?\n\n `No` starts the master_sync with default parameter.%s'%def_cfg_info, QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
-              if ret == QtGui.QMessageBox.Yes:
-                self.currentMaster.start_nodes([node[0]])
-                return
+      master = self.currentMaster
+      if masteruri is not None:
+        master = self.getMaster(masteruri, False)
+      if master is not None:
+        # ask the user to start the master_sync with loaded launch file
+        if not master.master_info is None:
+          node = master.getNode('/master_sync')
+          if node and node[0].has_configs():
+            def_cfg_info = '\nNote: default_cfg parameter will be changed!' if node[0].has_default_cfgs(node[0].cfgs) else ''
+            ret = QtGui.QMessageBox.question(self, 'Start synchronization','Start the synchronization using loaded configuration?\n\n `No` starts the master_sync with default parameter.%s'%def_cfg_info, QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+            if ret == QtGui.QMessageBox.Yes:
+              master.start_nodes([node[0]])
+              return
 
-          # start the master sync with default settings
-          sync_args = []
-          sync_args.append(''.join(['_interface_url:=', "'.'"]))
-          sync_args.append(''.join(['_sync_topics_on_demand:=', 'False']))
-          sync_args.append(''.join(['_ignore_hosts:=', '[]']))
-          sync_args.append(''.join(['_sync_hosts:=', '[]']))
-          sync_args.append(''.join(['_ignore_nodes:=', '[]']))
-          sync_args.append(''.join(['_sync_nodes:=', '[]']))
-          sync_args.append(''.join(['_ignore_topics:=', '[]']))
-          sync_args.append(''.join(['_sync_topics:=', '[]']))
-          sync_args.append(''.join(['_ignore_services:=', '[]']))
-          sync_args.append(''.join(['_sync_services:=', '[]']))
-          sync_args.append(''.join(['_sync_remote_nodes:=', 'False']))
-
-          try:
-            host = nm.nameres().getHostname(self.currentMaster.masteruri)
-            self._progress_queue_sync.add2queue(str(uuid.uuid4()), 
-                                           'start sync on '+str(host), 
-                                           nm.starter().runNodeWithoutConfig, 
-                                           (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', sync_args, str(self.currentMaster.masteruri), False, self.currentMaster.current_user))
-            self._progress_queue_sync.start()
-          except:
-            pass
-        elif not self.currentMaster.master_info is None:
-          node = self.currentMaster.master_info.getNodeEndsWith('master_sync')
-          if not node is None:
-            self.currentMaster.stop_nodes([node])
+        # start the master sync with default settings
+        default_sync_args = ["_interface_url:='.'",
+                             '_sync_topics_on_demand:=False',
+                             '_ignore_hosts:=[]', '_sync_hosts:=[]',
+                             '_ignore_nodes:=[]', '_sync_nodes:=[]',
+                             '_ignore_topics:=[]', '_sync_topics:=[]',
+                             '_ignore_services:=[]', '_sync_services:=[]',
+                             '_sync_remote_nodes:=False']
+        try:
+          host = nm.nameres().getHostname(master.masteruri)
+          self._progress_queue_sync.add2queue(str(uuid.uuid4()), 
+                                         'start sync on '+str(host), 
+                                         nm.starter().runNodeWithoutConfig, 
+                                         (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, str(master.masteruri), False, master.current_user))
+          self._progress_queue_sync.start()
+        except:
+          pass
       self.syncButton.setEnabled(True)
+
+  def on_sync_stop(self, masteruri=None):
+    master = self.currentMaster
+    if masteruri is not None:
+      master = self.getMaster(masteruri, False)
+    if master is not None and master.master_info is not None:
+      node = master.master_info.getNodeEndsWith('master_sync')
+      if node is not None:
+        master.stop_nodes([node])
 
   def on_master_timecheck(self):
     # HACK: sometimes the local monitoring will not be activated. This is the detection.
@@ -1203,12 +1236,10 @@ class MainWindow(QtGui.QMainWindow):
     On click on the sync item, the master_sync node will be started or stopped,
     depending on run state.
     '''
-    item = self.master_model.itemFromIndex(selected)
-    if isinstance(item, MasterSyncItem):
-      if MasterSyncItem.START_SYNC != item.synchronized:
-        self.syncButton.setChecked(item.synchronized != MasterSyncItem.SYNC)
-        item.synchronized = MasterSyncItem.START_SYNC
-        self.on_sync_released(True)
+    pass
+#     item = self.master_model.itemFromIndex(selected)
+#     if isinstance(item, MasterSyncItem):
+#       pass
 
   def on_master_table_activated(self, selected):
     item = self.master_model.itemFromIndex(selected)
@@ -1297,7 +1328,8 @@ class MainWindow(QtGui.QMainWindow):
     try:
       self._discover_dialog.raise_()
     except:
-      self._discover_dialog = NetworkDiscoveryDialog('226.0.0.0', 11511, 100, self)
+      mcast_group = rospy.get_param('/master_discovery/mcast_group', '226.0.0.0')
+      self._discover_dialog = NetworkDiscoveryDialog(mcast_group, 11511, 100, self)
       self._discover_dialog.network_join_request.connect(self._join_network)
       self._discover_dialog.show()
 
@@ -1318,17 +1350,19 @@ class MainWindow(QtGui.QMainWindow):
                       }
     params = {'Host' : ('string', 'localhost'),
               'Network(0..99)' : ('int', '0'),
+              'Start sync' : ('bool', nm.settings().start_sync_with_discovery),
               'Optional Parameter' : ('list', params_optional) }
     dia = ParameterDialog(params, sidebar_var='Host')
     dia.setFilterVisible(False)
     dia.setWindowTitle('Start discovery')
-    dia.resize(450,300)
+    dia.resize(450, 330)
     dia.setFocusField('Host')
     if dia.exec_():
       try:
         params = dia.getKeywords()
         hostnames = params['Host'] if isinstance(params['Host'], list) else [params['Host']]
         port = params['Network(0..99)']
+        start_sync = params['Start sync']
         discovery_type = params['Optional Parameter']['Discovery type']
         mastername = 'autodetect'
         masteruri = 'ROS_MASTER_URI'
@@ -1346,7 +1380,7 @@ class MainWindow(QtGui.QMainWindow):
         for hostname in hostnames:
           try:
             args = []
-            if not port is None and port and int(port) < 100 and int(port) >= 0:
+            if port is not None and port and int(port) < 100 and int(port) >= 0:
               args.append('_mcast_port:=%s'%(11511 + int(port)))
             else:
               args.append('_mcast_port:=%s'%(11511))
@@ -1359,12 +1393,31 @@ class MainWindow(QtGui.QMainWindow):
             usr = username
             if username == 'last used':
               usr = nm.settings().host_user(hostname)
+            muri = None if masteruri == 'ROS_MASTER_URI' else str(masteruri)
             self._progress_queue.add2queue(str(uuid.uuid4()), 
                                            'start discovering on %s'%hostname,
                                            nm.starter().runNodeWithoutConfig, 
-                                           (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, (None if masteruri == 'ROS_MASTER_URI' else str(masteruri)), False, usr))
+                                           (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, muri, False, usr))
 
-          except (Exception, nm.StartException), e:
+            # start the master sync with default settings
+            if start_sync:
+              if nm.is_local(hostname):
+                default_sync_args = ["_interface_url:='.'",
+                                     '_sync_topics_on_demand:=False',
+                                     '_ignore_hosts:=[]', '_sync_hosts:=[]',
+                                     '_ignore_nodes:=[]', '_sync_nodes:=[]',
+                                     '_ignore_topics:=[]', '_sync_topics:=[]',
+                                     '_ignore_services:=[]', '_sync_services:=[]',
+                                     '_sync_remote_nodes:=False']
+                self._progress_queue_sync.add2queue(str(uuid.uuid4()),
+                                               'start sync on %s' % hostname,
+                                               nm.starter().runNodeWithoutConfig,
+                                               (str(hostname), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, muri, False, usr))
+                self._progress_queue_sync.start()
+              else:
+                if hostname not in self._syncs_to_start:
+                  self._syncs_to_start.append(hostname)
+          except (Exception, nm.StartException) as e:
             import traceback
             print traceback.format_exc(1)
             rospy.logwarn("Error while start master_discovery for %s: %s"%(str(hostname), e))
@@ -1372,7 +1425,7 @@ class MainWindow(QtGui.QMainWindow):
                               'Error while start master_discovery',
                               str(e)).exec_()
           self._progress_queue.start()
-      except Exception, e:
+      except Exception as e:
         WarningMessageBox(QtGui.QMessageBox.Warning, "Start error", 
                           'Error while parse parameter',
                           str(e)).exec_()
@@ -1396,7 +1449,7 @@ class MainWindow(QtGui.QMainWindow):
 
   def poweroff_host(self, host):
     try:
-      masteruris = nm.nameres().masterurisByHost(host)
+      masteruris = nm.nameres().masterurisbyaddr(host)
       for masteruri in masteruris:
         master = self.getMaster(masteruri)
         master.stop_nodes_by_name(['/master_discovery'])
@@ -1777,6 +1830,7 @@ class MainWindow(QtGui.QMainWindow):
         master.on_remove_all_launch_server()
     elif url.toString().startswith('node://'):
       if not self.currentMaster is None:
+        print "CHANGE ndoe"
         self.currentMaster.on_node_selection_changed(None, None, True, url.encodedPath())
     elif url.toString().startswith('topic://'):
       if not self.currentMaster is None:
