@@ -34,8 +34,8 @@
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.4.3"  # git describe --tags --dirty --always
-__date__ = "2015-11-26"  # git log -1 --date=iso
+__version__ = "0.4.4-0"  # git describe --tags --dirty --always
+__date__ = "2015-12-15"  # git log -1 --date=iso
 
 import argparse
 import os
@@ -196,8 +196,6 @@ def __is_local(hostname):
   try:
     machine_addr = socket.gethostbyname(hostname)
   except socket.gaierror:
-    import traceback
-    print traceback.format_exc()
     with _lock:
       HOSTS_CACHE[hostname] = False
     return False
