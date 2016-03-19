@@ -31,18 +31,19 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import os, shlex
-import socket
-import types
-import time
 import signal
+import socket
+import time
+import types
+import xmlrpclib
 
 import roslib
 import rospy
-import xmlrpclib
 
-import node_manager_fkie as nm
 from node_manager_fkie.common import get_ros_home, masteruri_from_ros, package_name
+from node_manager_fkie.name_resolution import NameResolution
 from node_manager_fkie.supervised_popen import SupervisedPopen
+import node_manager_fkie as nm
 
 
 class StartException(Exception):
@@ -158,6 +159,9 @@ class StartHandler(object):
     if runcfg.masteruri is None:
       runcfg.masteruri = masteruri_from_ros()
       env.append(('ROS_MASTER_URI', runcfg.masteruri))
+      ros_hostname = NameResolution.get_ros_hostname(runcfg.masteruri)
+      if ros_hostname:
+        env.append(('ROS_HOSTNAME', ros_hostname))
 
     abs_paths = list() # tuples of (parameter name, old value, new value)
     not_found_packages = list() # package names
@@ -184,7 +188,7 @@ class StartHandler(object):
       abs_paths[len(abs_paths):], not_found_packages[len(not_found_packages):] = cls._load_parameters(runcfg.masteruri, params, clear_params, runcfg.user, runcfg.pw, runcfg.auto_pw_request)
     #'print "RUN prepared", node, time.time()
 
-    if nm.is_local(host):
+    if nm.is_local(host, wait=True):
       nm.screen().testScreen()
       if runcfg.executable:
         cmd_type = runcfg.executable
@@ -238,6 +242,9 @@ class StartHandler(object):
       rospy.loginfo("RUN: %s", ' '.join(cmd_args))
       new_env = dict(os.environ)
       new_env['ROS_MASTER_URI'] = runcfg.masteruri
+      ros_hostname = NameResolution.get_ros_hostname(runcfg.masteruri)
+      if ros_hostname:
+        new_env['ROS_HOSTNAME'] = ros_hostname
       # add the namespace environment parameter to handle some cases,
       # e.g. rqt_cpp plugins
       if n.namespace:
@@ -275,7 +282,7 @@ class StartHandler(object):
               abs_paths.append(('ENV', "%s=%s"%(k,v), "%s=%s"%(k,v_value)))
               if not found and package:
                 not_found_packages.append(package)
-          env_command = "env "+' '.join(["\"%s=%s\""%(k,v) for (k, v) in new_env.items()])
+          env_command = "env " + ' '.join(["%s=\'%s\'" % (k, v) for (k, v) in new_env.items()])
         except nm.AuthenticationRequest as e:
           raise nm.InteractionNeededError(e, cls.runNode, (runcfg,))
 
@@ -496,7 +503,7 @@ class StartHandler(object):
         fullname = roslib.names.ns_join(namespace, name)
     args2.append(''.join(['__name:=', name]))
     # run on local host
-    if nm.is_local(host):
+    if nm.is_local(host, wait=True):
       try:
         cmd = roslib.packages.find_node(package, binary)
       except roslib.packages.ROSPkgException as e:
@@ -533,9 +540,12 @@ class StartHandler(object):
       new_env=dict(os.environ)
       if namespace:
         new_env['ROS_NAMESPACE'] = namespace
-      if not masteruri is None:
+      if masteruri is not None:
         cls._prepareROSMaster(masteruri)
         new_env['ROS_MASTER_URI'] = masteruri
+        ros_hostname = NameResolution.get_ros_hostname(masteruri)
+        if ros_hostname:
+          new_env['ROS_HOSTNAME'] = ros_hostname
       SupervisedPopen(shlex.split(cmd_str), env=new_env, object_id="Run without config", description="Run without config [%s]%s"%(str(package), str(binary)))
     else:
       # run on a remote machine
@@ -544,7 +554,7 @@ class StartHandler(object):
                   '--node_type', str(binary),
                   '--node_name', str(fullname)]
       startcmd[len(startcmd):] = args2
-      if not masteruri is None:
+      if masteruri is not None:
         startcmd.append('--masteruri')
         startcmd.append(masteruri)
       rospy.loginfo("Run remote on %s: %s", host, ' '.join(startcmd))
@@ -573,8 +583,8 @@ class StartHandler(object):
 
   @classmethod
   def _prepareROSMaster(cls, masteruri):
-    if not masteruri: 
-      masteruri = roslib.rosenv.get_master_uri()
+    if masteruri is None:
+      masteruri = masteruri_from_ros()
     #start roscore, if needed
     try:
       if not os.path.isdir(nm.ScreenHandler.LOG_PATH):
@@ -582,20 +592,26 @@ class StartHandler(object):
       socket.setdefaulttimeout(3)
       master = xmlrpclib.ServerProxy(masteruri)
       master.getUri(rospy.get_name())
+      # restart ROSCORE on different masteruri?, not now...
+#      master_uri = master.getUri(rospy.get_name())
+#      if masteruri != master_uri[2]:
+#        # kill the local roscore...
+#        raise
     except:
 #      socket.setdefaulttimeout(None)
 #      import traceback
-#      print traceback.format_exc(1)
+#      print traceback.format_exc(3)
       # run a roscore
       from urlparse import urlparse
       master_host = urlparse(masteruri).hostname
       if nm.is_local(master_host, True):
-        print "Start ROS-Master with", masteruri, "..."
         master_port = urlparse(masteruri).port
         new_env = dict(os.environ)
         new_env['ROS_MASTER_URI'] = masteruri
+        ros_hostname = NameResolution.get_ros_hostname(masteruri)
+        if ros_hostname:
+          new_env['ROS_HOSTNAME'] = ros_hostname
         cmd_args = '%s roscore --port %d'%(nm.ScreenHandler.getSceenCmd('/roscore--%d'%master_port), master_port)
-        print "    %s"%cmd_args
         try:
           SupervisedPopen(shlex.split(cmd_args), env=new_env, object_id="ROSCORE", description="Start roscore")
           # wait for roscore to avoid connection problems while init_node
@@ -603,7 +619,6 @@ class StartHandler(object):
           count = 1
           while result == -1 and count < 11:
             try:
-              print "  retry connect to ROS master", count, '/', 10
               master = xmlrpclib.ServerProxy(masteruri)
               result, _, _ = master.getUri(rospy.get_name())#_:=uri, msg
             except:
@@ -902,7 +917,9 @@ class StartHandler(object):
 
   def _poweroff_wo(self, host, auto_pw_request=False, user=None, pw=None):
     if nm.is_local(host):
-      rospy.logwarn("No poweroff on localhost supported!")
+      rospy.logwarn("shutdown localhost localhost!")
+      cmd = nm.settings().terminal_cmd(['sudo poweroff'], "poweroff")
+      SupervisedPopen(shlex.split(cmd), object_id="poweroff", description="poweroff")
     else:
       rospy.loginfo("poweroff %s", host)
       # kill on a remote machine

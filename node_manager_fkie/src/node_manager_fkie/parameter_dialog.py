@@ -242,10 +242,10 @@ class ParameterDescription(object):
       return self.widget().value()
     elif self.isPrimitiveType():
       self.updateValueFromField()
-      if self.isTimeType() and self._value == 'now':
-        # FIX: rostopic does not support 'now' values in sub-headers
-        t = time.time()
-        return ({'secs': int(t), 'nsecs': int((t-int(t))*1000000)}, self.changed())
+#      if self.isTimeType() and self._value == 'now':
+#        # FIX: rostopic does not support 'now' values in sub-headers
+#        t = time.time()
+#        return ({'secs': int(t), 'nsecs': int((t-int(t))*1000000)}, self.changed())
     return (self._value, self.changed())
 
   def removeCachedValue(self, value):
@@ -574,6 +574,7 @@ class ArrayBox(MainBox):
             entry_frame._createFieldFromDict(v)
             self._dynamic_items_count += 1
             self.count_label.setText(str(self._dynamic_items_count))
+            break
     finally:
       self.setUpdatesEnabled(True)
 
