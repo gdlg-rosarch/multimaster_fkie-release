@@ -97,6 +97,7 @@ class MainWindow(QtGui.QMainWindow):
     Creates the window, connects the signals and init the class.
     '''
     QtGui.QMainWindow.__init__(self)
+    self.default_load_launch = os.path.abspath(resolve_url(files[0])) if files else ''
     restricted_to_one_master = False
     self._finished = False
     self._history_selected_robot = ''
@@ -221,7 +222,6 @@ class MainWindow(QtGui.QMainWindow):
     flags = self.windowFlags()
     self.setWindowFlags(flags | QtCore.Qt.WindowContextHelpButtonHint)
 
-    self.default_load_launch = os.path.abspath(resolve_url(files[0])) if files else ''
     if self.default_load_launch:
       if os.path.isdir(self.default_load_launch):
         self.launch_dock.launchlist_model.setPath(self.default_load_launch)
@@ -389,8 +389,13 @@ class MainWindow(QtGui.QMainWindow):
 
   def closeEvent(self, event):
     # ask to close nodes on exit
-    if self._close_on_exit:
-      masters2stop, self._close_on_exit = SelectDialog.getValue('Stop nodes?', "Select masters where to stop:", self.masters.keys(), False, False, '', self, select_if_single=False)
+    if self._close_on_exit and nm.settings().confirm_exit_when_closing:
+      res = SelectDialog.getValue('Stop nodes?', "Select masters where to stop:",
+                                  self.masters.keys(), False, False, '', self,
+                                  select_if_single=False,
+                                  checkitem1="don't show this dialog again")
+      masters2stop, self._close_on_exit = res[0], res[1]
+      nm.settings().confirm_exit_when_closing = not res[2]
       if self._close_on_exit:
         self._on_finish = True
         self._stop_local_master = None
@@ -410,6 +415,11 @@ class MainWindow(QtGui.QMainWindow):
       else:
         self._close_on_exit = True
       event.ignore()
+    elif self._are_master_in_process():
+      QtCore.QTimer.singleShot(200, self._test_for_finish)
+      self.masternameLabel.setText('<span style=" font-size:14pt; font-weight:600;">%s ...closing...</span>' % self.masternameLabel.text())
+      rospy.loginfo("Wait for running processes are finished...")
+      event.ignore()
     else:
       try:
         self.storeSetting()
@@ -418,12 +428,17 @@ class MainWindow(QtGui.QMainWindow):
       self.finish()
       QtGui.QMainWindow.closeEvent(self, event)
 
-  def _test_for_finish(self):
-    # this method test on exit for running process queues with stopping jobs
+  def _are_master_in_process(self):
     for uri, m in self.masters.items():
       if m.in_process():
-        QtCore.QTimer.singleShot(200, self._test_for_finish)
-        return
+        return True
+    return False
+
+  def _test_for_finish(self):
+    # this method test on exit for running process queues with stopping jobs
+    if self._are_master_in_process():
+      QtCore.QTimer.singleShot(200, self._test_for_finish)
+      return
     if hasattr(self, '_stop_local_master') and self._stop_local_master is not None:
       self.finish()
       self._stop_local_master.killall_roscore()
@@ -1449,6 +1464,12 @@ class MainWindow(QtGui.QMainWindow):
 
   def poweroff_host(self, host):
     try:
+      if nm.is_local(str(host)):
+        ret = QtGui.QMessageBox.warning(self, "ROS Node Manager",
+                                 "Do you really want to shutdown localhost?",
+                                 QtGui.QMessageBox.Ok | QtGui.QMessageBox.Cancel)
+        if ret == QtGui.QMessageBox.Cancel:
+          return
       masteruris = nm.nameres().masterurisbyaddr(host)
       for masteruri in masteruris:
         master = self.getMaster(masteruri)
@@ -1830,7 +1851,6 @@ class MainWindow(QtGui.QMainWindow):
         master.on_remove_all_launch_server()
     elif url.toString().startswith('node://'):
       if not self.currentMaster is None:
-        print "CHANGE ndoe"
         self.currentMaster.on_node_selection_changed(None, None, True, url.encodedPath())
     elif url.toString().startswith('topic://'):
       if not self.currentMaster is None:
