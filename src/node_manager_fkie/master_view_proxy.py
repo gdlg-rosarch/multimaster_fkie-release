@@ -163,6 +163,8 @@ class MasterViewProxy(QtGui.QWidget):
     self.__current_parameter_robot_icon = ''
     self.__republish_params = {} # { topic : params, created by dialog}
     self.__last_selection = 0
+    self._on_stop_kill_roscore = False
+    self._on_stop_poweroff = False
     # store the running_nodes to update to duplicates after load a launch file
     self.__running_nodes = dict() # dict (node name : masteruri)
     self.default_cfg_handler = DefaultConfigHandler()
@@ -345,6 +347,8 @@ class MasterViewProxy(QtGui.QWidget):
     self.default_cfg_handler.stop()
     self.launch_server_handler.stop()
     self._progress_queue.stop()
+    if self._on_stop_kill_roscore:
+      self.killall_roscore()
     for ps in self.__echo_topics_dialogs.values():
       try:
         ps.terminate()
@@ -544,7 +548,8 @@ class MasterViewProxy(QtGui.QWidget):
     self.masterTab.editRosParamButton.setEnabled(len(selectedNodes) == 1)
     self.masterTab.saveButton.setEnabled(len(self.launchfiles) > 1)
     # enable the close button only for local configurations
-    self.masterTab.closeCfgButton.setEnabled(len([path for path, _ in self.__configs.items() if (isinstance(path, tuple) and path[2] == self.masteruri) or not isinstance(path, tuple)]) > 0) #_:=cfg
+    self.masterTab.closeCfgButton.setEnabled(True)
+#    self.masterTab.closeCfgButton.setEnabled(len([path for path, _ in self.__configs.items() if (isinstance(path, tuple) and path[2] == self.masteruri) or not isinstance(path, tuple)]) > 0) #_:=cfg
 
   def hasLaunchfile(self, path):
     '''
@@ -1280,8 +1285,8 @@ class MasterViewProxy(QtGui.QWidget):
       text += '&nbsp; <a href="kill_screen://%s" title="Kill screen of the node"><img src=":icons/sekkyumu_kill_screen_24.png" alt="killscreen"></a>'%node.name
       if launches:
         text += '&nbsp; <a href="start_node_at_host://%s"  title="Start node at another host"><img src=":icons/sekkyumu_start_athost_24.png" alt="start@host"></a>'%node.name
-        if node.node_info.pid is None or node.node_info.uri is None:
-          text += '&nbsp; <a href="start_node_adv://%s" title="Start node with additional options, e.g. loglevel"><img src=":icons/sekkyumu_play_alt_24.png" alt="play alt"></a>'%node.name
+#        if node.node_info.pid is None or node.node_info.uri is None:
+        text += '&nbsp; <a href="start_node_adv://%s" title="Start node with additional options, e.g. loglevel"><img src=":icons/sekkyumu_play_alt_24.png" alt="play alt"></a>' % node.name
       text += '&nbsp; <a href="copy_log_path://%s" title="copy log path to clipboard"><img src=":icons/crystal_clear_copy_log_path_24.png" alt="copy_log_path"></a>'%node.name
       text += '<dl>'
       text += '<dt><b>URI</b>: %s</dt>'%node.node_info.uri
@@ -1296,7 +1301,7 @@ class MasterViewProxy(QtGui.QWidget):
           text += '<dt><font color="#FF9900"><b>The node is running on remote host, but is not synchronized, because of filter or errors while sync, see log of <i>master_sync</i></b></font></dt>'
           text += '<dt><font color="#FF9900"><i>Are you use the same ROS packages?</i></font></dt>'
       if node.has_running and node.node_info.pid is None and node.node_info.uri is None:
-        text += '<dt><font color="#FF9900"><b>Where are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</b></font></dt>'
+        text += '<dt><font color="#FF9900"><b>There are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</b></font></dt>'
       if not node.node_info.uri is None and node.node_info.masteruri != self.masteruri:
         text += '<dt><font color="#339900"><b>synchronized</b></font></dt>'
       if node.node_info.pid is None and not node.node_info.uri is None:
@@ -1592,7 +1597,7 @@ class MasterViewProxy(QtGui.QWidget):
     self.setCursor(QtCore.Qt.WaitCursor)
     try:
       selectedNodes = self.nodesFromIndexes(self.masterTab.nodeTreeView.selectionModel().selectedIndexes())
-      self.start_nodes(selectedNodes, use_adv_cfg=True)
+      self.start_nodes(selectedNodes, force=True, use_adv_cfg=True)
     finally:
       self.setCursor(cursor)
 
@@ -1915,11 +1920,14 @@ class MasterViewProxy(QtGui.QWidget):
     host = nm.nameres().getHostname(self.masteruri)
     if host:
       try:
-        self._progress_queue.add2queue(str(uuid.uuid4()), 
-                                       'killall roscore on %s'%host,
-                                       nm.starter().killall_roscore,
-                                       (host, self.current_user))
-        self._progress_queue.start()
+        if not nm.is_local(self.mastername):
+          self._progress_queue.add2queue(str(uuid.uuid4()), 
+                                         'killall roscore on %s'%host,
+                                         nm.starter().killall_roscore,
+                                         (host, self.current_user))
+          self._progress_queue.start()
+        else:
+          nm.starter().killall_roscore(host, self.current_user)
       except Exception as e:
         rospy.logwarn("Error while killall roscore on %s: %s"%(host, e))
         raise DetailedError("Killall roscore error",
@@ -2259,24 +2267,65 @@ class MasterViewProxy(QtGui.QWidget):
 
   def on_close_clicked(self):
     '''
-    Closes the open launch configurations. If more then one configuration is 
-    open a selection dialog will be open.
+    Opens a dialog to select configurations to close or stop all nodes
+    (with roscore) or shutdown the host.
     '''
     choices = dict()
 
-    for path, _ in self.__configs.items():#_:=cfg
+    for path, _ in self.__configs.items():
       if isinstance(path, tuple):
         if path[2] == self.masteruri:
-          choices[''.join(['[', path[0], ']'])] = path
+          choices['DEFAULT CFG: %s' % path[0]] = path
       else:
-        choices[''.join([os.path.basename(path), '   [', str(package_name(os.path.dirname(path))[0]), ']'])] = path
-    cfgs, _ = SelectDialog.getValue('Close configurations', '', choices.keys(), False, False, self)
-
+        package = str(package_name(os.path.dirname(path))[0])
+        choices['%s [%s]' % (os.path.basename(path), package)] = path
+    cfg_items = choices.keys()
+    cfg_items.sort()
+    res = SelectDialog.getValue('Close/Stop/Shutdown', '',
+                                cfg_items, False, False,
+                                self, checkitem1='stop ROS',
+                                checkitem2='shutdown host')
+    cfgs, _, stop_nodes, shutdown = res[0], res[1], res[2], res[3]
     # close configurations
-    for c in cfgs:
-      self._close_cfg(choices[c])
+    for config in cfgs:
+      self._close_cfg(choices[config])
+    if stop_nodes:
+      self._on_stop_kill_roscore = True
+      # stop all nodes, system nodes at the end
+      ignore_nodes = [rospy.get_name(), '/master_discovery', '/rosout']
+      self.stop_nodes_by_name(self.getRunningNodesIfLocal(), True, ignore_nodes)
+      if shutdown:
+        self.poweroff()
+      else:
+        self.stop_nodes_by_name(['/master_discovery'], True)
+      self.stop_nodes_by_name(['/node_manager'], True)
+    elif shutdown:
+      self.poweroff()
     self.updateButtons()
     self.update_robot_icon()
+
+  def poweroff(self):
+    try:
+      if nm.is_local(self.mastername):
+        ret = QtGui.QMessageBox.warning(self, "ROS Node Manager",
+                                 "Do you really want to shutdown localhost?",
+                                 QtGui.QMessageBox.Ok | QtGui.QMessageBox.Cancel)
+        if ret == QtGui.QMessageBox.Cancel:
+          return
+      self._on_stop_poweroff = True
+      # on shutdown stop only the /master_dsicovery node to remove it from lists
+      # in other remote nodes
+      self.stop_nodes_by_name(['/master_discovery'], True)
+      self._progress_queue.add2queue(str(uuid.uuid4()),
+                                     'poweroff `%s`' % self.mastername,
+                                     nm.starter().poweroff,
+                                     ('%s' % self.mastername,))
+      self._progress_queue.start()
+    except (Exception, nm.StartException), emsg:
+      rospy.logwarn("Error while poweroff %s: %s", self.mastername, str(emsg))
+      WarningMessageBox(QtGui.QMessageBox.Warning, "Run error",
+                        'Error while poweroff %s' % self.mastername,
+                        '%s' % emsg).exec_()
 
   def _close_cfg(self, cfg):
     try:
