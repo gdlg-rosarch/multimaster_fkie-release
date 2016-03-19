@@ -30,20 +30,21 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-import os
-from python_qt_binding import QtGui
 from python_qt_binding import QtCore
+from python_qt_binding import QtGui
+import os
 
 import roslib
 import rospy
-from node_manager_fkie.xml_highlighter import XmlHighlighter
-from node_manager_fkie.yaml_highlighter import YamlHighlighter
-from node_manager_fkie.detailed_msg_box import WarningMessageBox
 
-import node_manager_fkie as nm
 from master_discovery_fkie.common import resolve_url
 from node_manager_fkie.common import package_name
+from node_manager_fkie.detailed_msg_box import WarningMessageBox
 from node_manager_fkie.run_dialog import PackageDialog
+from node_manager_fkie.xml_highlighter import XmlHighlighter
+from node_manager_fkie.yaml_highlighter import YamlHighlighter
+import node_manager_fkie as nm
+
 
 class Editor(QtGui.QTextEdit):
   '''
@@ -63,6 +64,8 @@ class Editor(QtGui.QTextEdit):
     self.parent = parent
     QtGui.QTextEdit.__init__(self, parent)
     self.setObjectName(' - '.join(['Editor', filename]))
+    self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+    self.customContextMenuRequested.connect(self.show_custom_context_menu)
     font = QtGui.QFont()
     font.setFamily("Fixed".decode("utf-8"))
     font.setPointSize(12)
@@ -91,9 +94,13 @@ class Editor(QtGui.QTextEdit):
     self.setAcceptDrops(True)
     if filename.endswith('.launch'):
       self.hl = XmlHighlighter(self.document())
+      self.cursorPositionChanged.connect(self._document_position_changed)
     else:
       self.hl = YamlHighlighter(self.document())
 
+  def _document_position_changed(self):
+    if isinstance(self.hl, XmlHighlighter) and nm.settings().highlight_xml_blocks:
+      self.hl.mark_tag_block(self.textCursor().position())
 #  def __del__(self):
 #    print "********** desctroy:", self.objectName()
 
@@ -148,8 +155,8 @@ class Editor(QtGui.QTextEdit):
 
   def setCurrentPath(self, path):
     '''
-    Sets the current working path. This path is to open the included files, which
-    contains the relative path.
+    Sets the current working path. This path is to open the included files,
+    which contains the relative path.
     @param path: the path of the current opened file (without the file)
     @type path: C{str}
     '''
@@ -157,13 +164,13 @@ class Editor(QtGui.QTextEdit):
 
   def interpretPath(self, path):
     '''
-    Tries to determine the path of the included file. The statement of 
+    Tries to determine the path of the included file. The statement of
     C{$(find 'package')} will be resolved.
     @param path: the sting which contains the included path
     @type path: C{str}
-    @return: if no leading C{os.sep} is detected, the path setted by L{setCurrentPath()}
-    will be prepend. C{$(find 'package')} will be resolved. Otherwise the parameter 
-    itself will be returned
+    @return: if no leading C{os.sep} is detected, the path setted by
+    L{setCurrentPath()} will be prepend. C{$(find 'package')} will be resolved.
+    Otherwise the parameter itself will be returned
     @rtype: C{str} 
     '''
     path = path.strip()
@@ -331,9 +338,9 @@ class Editor(QtGui.QTextEdit):
     elif event.modifiers() == QtCore.Qt.AltModifier and event.key() == QtCore.Qt.Key_Space:
       ext = os.path.splitext(self.filename)
       if ext[1] in self.CONTEXT_FILE_EXT:
-        menu = self._create_context_substitution_menu()
+        menu = self._create_context_substitution_menu(False)
         if menu is None:
-          menu = self._create_context_tag_menu()
+          menu = self._create_context_menu_for_tag()
         if menu:
           menu.exec_(self.mapToGlobal(self.cursorRect().bottomRight()))
     elif event.key() != QtCore.Qt.Key_Escape:
@@ -528,113 +535,68 @@ class Editor(QtGui.QTextEdit):
   ########## Ctrl&Space  Context menu                                    ###### 
   #############################################################################
 
-  def _create_context_tag_menu(self):
-    parent_tag, inblock, attrs = self._get_parent_tag()
-    if not parent_tag:
-      return None
-    menu = QtGui.QMenu(self)
-    menu.triggered.connect(self._context_activated)
-    text = self.toPlainText()
-    pos = self.textCursor().position() - 1
-    try:
-      if not inblock:
-        # create a menu with attributes
-        attributes = sorted(list((set(XmlHighlighter.LAUNCH_ATTR[parent_tag]) - set(attrs))))
-        for attr in attributes:
-          action = menu.addAction(attr.rstrip('='))
-          action.setData('%s"'%attr if text[pos] == ' ' else ' %s"'%attr)
-      else:
-        # create a menu with tags
-        tags = sorted(XmlHighlighter.LAUNCH_CHILDS[parent_tag])
-        if not tags:
-          return None
-        for tag in tags:
-          data = '<%s></%s>'%(tag, tag) if XmlHighlighter.LAUNCH_CHILDS[tag] else '<%s/>'%tag
-          if text[pos] == '<':
-            data = data[1:]
-          action = menu.addAction(tag)
-          action.setData(data)
-    except:
-#      import traceback
-#      print traceback.format_exc(1)
-      return None
-    return menu
+  def show_custom_context_menu(self, pos):
+    self.setTextCursor(self.cursorForPosition(pos))
+    menu = QtGui.QTextEdit.createStandardContextMenu(self)
+    submenu = self._create_context_menu_for_tag()
+    if submenu is not None:
+      menu.addMenu(submenu)
+    argmenu = self._create_context_substitution_menu()
+    if argmenu is not None:
+      menu.addMenu(argmenu)
+    menu.exec_(self.mapToGlobal(pos))
 
-  def _create_context_substitution_menu(self):
-    text = self.toPlainText()
-    pos = self.textCursor().position() - 1
-    try:
-      if text[pos] == '$' or (text[pos] == '(' and text[pos-1] == '$'):
-        menu = QtGui.QMenu(self)
-        menu.triggered.connect(self._context_activated)
-        for arg in self.SUBSTITUTION_ARGS:
-          action = menu.addAction("%s"%arg)
-          action.setData("(%s"%arg if text[pos] == '$' else "%s"%arg)
-        return menu
-    except:
-      pass
+  def contextMenuEvent(self, event):
+    QtGui.QTextEdit.contextMenuEvent(self, event)
+
+  def _create_context_menu_for_tag(self):
+    if isinstance(self.hl, XmlHighlighter):
+      tag, start, end = self.hl.get_tag_of_current_block(self.toPlainText(), self.textCursor().position())
+      if tag:
+        try:
+          menu = QtGui.QMenu("ROS <%s>" % tag, self)
+          menu.triggered.connect(self._context_activated)
+          # create a menu with attributes
+          menu_attr = QtGui.QMenu("attributes", menu)
+          attributes = sorted(list(set(XmlHighlighter.LAUNCH_ATTR[tag])))
+          for attr in attributes:
+            action = menu_attr.addAction(attr.rstrip('='))
+            action.setData('%s""' % attr)
+          menu.addMenu(menu_attr)
+          # create a menu with tags
+          tags = sorted(XmlHighlighter.LAUNCH_CHILDS[tag])
+          if tags:
+            menu_tags = QtGui.QMenu("tags", menu)
+            for tag in tags:
+              data = '<%s></%s>' % (tag, tag) if XmlHighlighter.LAUNCH_CHILDS[tag] else '<%s/>' % tag
+              action = menu_tags.addAction(tag)
+              action.setData(data)
+            menu.addMenu(menu_tags)
+          return menu
+        except:
+          import traceback
+          print traceback.format_exc(1)
+          return None
     return None
 
-  def _get_parent_tag(self):
-    text = self.toPlainText()
-    pos = self.textCursor().position() - 1
-    # do not parse, if the menu was requested in a string sequence
-    try:
-      if not (text[pos] in [' ', '<', '>', '"', '\n'] or text[pos+1] in [' ', '<','"', '\n']):
-        return '', False, []
-    except:
-      pass
-    instr = (text[:pos+1].count('"') % 2)
-    # do not parse, if the menu was requested in a string definition
-    if instr:
-      return '', False, []
-    # some parameter definition
-    closed_tags = []
-    current_attr = []
-    tag_reading = True
-    tag = ''
-    attr_reading = False
-    attr = ''
-    closed_gts = False
-    # parse the text from current position to the beginning
-    i = pos
-    while i >= 0:
-      if text[i] == '"':
-        instr = not instr
-      elif not instr:
-        # parse only text which is not in string definitions
-        if text[i] == '=':
-          attr_reading = True
-        elif text[i] in ['<', '/', '>']:
-          if text[i] == '>':
-            closed_gts = True
-            tag = ''
-          elif text[i] == '/' and closed_gts:
-            closed_gts = False
-            closed_tags.append(tag if tag else '/')
-            tag = ''
-          elif text[i] == '<':
-            if closed_tags and (tag == closed_tags[-1] or closed_tags[-1] == '/'):
-              closed_tags.pop()
-              current_attr = []
-              tag = ''
-            elif tag:
-              return tag[::-1], closed_gts, current_attr # reverse the tag
-        # start or end of attribute parsing
-        elif text[i] == ' ':
-          if attr_reading and attr:
-            current_attr.append("%s="%attr[::-1])
-            attr_reading = False
-          attr = ''
-          tag = ''
-          tag_reading = True
-        else:
-          if tag_reading or closed_gts:
-            tag += text[i]
-          if attr_reading:
-            attr += text[i]
-      i -= 1
-    return '', False, []
+  def _create_context_substitution_menu(self, force_all=True):
+    if isinstance(self.hl, XmlHighlighter):
+      text = self.toPlainText()
+      pos = self.textCursor().position() - 1
+      try:
+        if force_all or (text[pos] == '$' or (text[pos] == '(' and text[pos - 1] == '$')):
+          menu = QtGui.QMenu("ROS substitution args", self)
+          menu.triggered.connect(self._context_activated)
+          for arg in self.SUBSTITUTION_ARGS:
+            action = menu.addAction("%s" % arg)
+            if force_all:
+              action.setData("$(%s )" % arg)
+            else:
+              action.setData("(%s" % arg if text[pos] == '$' else "%s" % arg)
+          return menu
+      except:
+        pass
+    return None
 
   def _context_activated(self, arg):
     cursor = self.textCursor()
@@ -723,7 +685,10 @@ class XmlEditor(QtGui.QDialog):
     self._error_icon = QtGui.QIcon(":/icons/crystal_clear_warning.png")
     self._empty_icon = QtGui.QIcon()
     self.setWindowIcon(self.mIcon)
-    self.setWindowTitle("ROSLaunch Editor");
+    window_title = "ROSLaunch Editor"
+    if filenames:
+      window_title = self.__getTabName(filenames[0])
+    self.setWindowTitle(window_title);
 #    self.finished.connect(self.closeEvent)
     self.init_filenames = list(filenames)
 
@@ -846,7 +811,7 @@ class XmlEditor(QtGui.QDialog):
         self.files.append(filename)
         editor.setCurrentPath(os.path.basename(filename))
         editor.load_request_signal.connect(self.on_load_request)
-        editor.textChanged.connect(self.on_editor_textChanged)
+        editor.document().modificationChanged.connect(self.on_editor_modificationChanged)
         editor.cursorPositionChanged.connect(self.on_editor_positionChanged)
         editor.setFocus(QtCore.Qt.OtherFocusReason)
         self.tabWidget.setCurrentIndex(tab_index)
@@ -863,6 +828,7 @@ class XmlEditor(QtGui.QDialog):
       if self.find(search_text, False, exclude_xml_comments=True):
         if not self.find_dialog.search_pos.isNull():
           self.tabWidget.currentWidget().moveCursor(QtGui.QTextCursor.StartOfLine)
+          self.tabWidget.currentWidget().moveCursor(QtGui.QTextCursor.NextWord)
 
   def on_close_tab(self, tab_index):
     '''
@@ -945,9 +911,9 @@ class XmlEditor(QtGui.QDialog):
     elif saved:
       self.tabWidget.setTabIcon(self.tabWidget.currentIndex(), self._empty_icon)
       self.tabWidget.setTabToolTip(self.tabWidget.currentIndex(), '')
-      self.on_editor_textChanged()
+#      self.on_editor_textChanged()
 
-  def on_editor_textChanged(self):
+  def on_editor_modificationChanged(self, value=None):
     '''
     If the content was changed, a '*' will be shown in the tab name.
     '''
@@ -1000,7 +966,7 @@ class XmlEditor(QtGui.QDialog):
   def __getTabName(self, lfile):
     base = os.path.basename(lfile).replace('.launch', '')
     (package, _) = package_name(os.path.dirname(lfile))
-    return '%s[%s]'%(base, package)
+    return '%s [%s]'%(base, package)
 
   def on_find_dialog_clicked(self, button):
     '''
@@ -1102,8 +1068,12 @@ class XmlEditor(QtGui.QDialog):
     btn.setText(QtGui.QApplication.translate("XmlEditor", "Add tag", None, QtGui.QApplication.UnicodeUTF8))
     btn.setShortcut(QtGui.QApplication.translate("XmlEditor", "Ctrl+T", None, QtGui.QApplication.UnicodeUTF8))
     btn.setToolTip('Adds a ROS launch tag to launch file (Ctrl+T)')
+    btn.setMenu(self._create_tag_menu(btn))
+    return btn
+
+  def _create_tag_menu(self, parent=None):
     # creates a tag menu
-    tag_menu = QtGui.QMenu(btn)
+    tag_menu = QtGui.QMenu("ROS Tags", parent)
     # group tag
     add_group_tag_action = QtGui.QAction("<group>", self, statusTip="", triggered=self._on_add_group_tag)
     tag_menu.addAction(add_group_tag_action)
@@ -1147,10 +1117,7 @@ class XmlEditor(QtGui.QDialog):
     # test tag with all attributes
     add_test_tag_all_action = QtGui.QAction("<test all>", self, statusTip="", triggered=self._on_add_test_tag_all)
     tag_menu.addAction(add_test_tag_all_action)
-
-
-    btn.setMenu(tag_menu)
-    return btn
+    return tag_menu
 
   def _insert_text(self, text):
     cursor = self.tabWidget.currentWidget().textCursor()
