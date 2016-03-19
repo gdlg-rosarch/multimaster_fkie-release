@@ -116,6 +116,8 @@ class Settings(object):
   MAX_TIMEDIFF = 0.5
 
   START_SYNC_WITH_DISCOVERY = False
+  CONFIRM_EXIT_WHEN_CLOSING = True
+  HIGHLIGHT_XML_BLOCKS = True
 
   def __init__(self):
     self.reload()
@@ -169,6 +171,8 @@ class Settings(object):
     self.logging.loglevel_superdebug = settings.value('logging/level_superdebug', LoggingConfig.LOGLEVEL_SUPERDEBUG)
     self.logging.console_format = settings.value('logging/rosconsole_format', LoggingConfig.CONSOLE_FORMAT)
     self._start_sync_with_discovery = self.str2bool(settings.value('start_sync_with_discovery', self.START_SYNC_WITH_DISCOVERY))
+    self._confirm_exit_when_closing = self.str2bool(settings.value('confirm_exit_when_closing', self.CONFIRM_EXIT_WHEN_CLOSING))
+    self._highlight_xml_blocks = self.str2bool(settings.value('highlight_xml_blocks', self.HIGHLIGHT_XML_BLOCKS))
 
   def masteruri(self):
     return self._masteruri
@@ -356,6 +360,30 @@ class Settings(object):
       self._start_sync_with_discovery = v
       settings = self.qsettings(self.CFG_FILE)
       settings.setValue('start_sync_with_discovery', self._start_sync_with_discovery)
+
+  @property
+  def confirm_exit_when_closing(self):
+    return self._confirm_exit_when_closing
+
+  @confirm_exit_when_closing.setter
+  def confirm_exit_when_closing(self, value):
+    val = self.str2bool(value)
+    if self._confirm_exit_when_closing != val:
+      self._confirm_exit_when_closing = val
+      settings = self.qsettings(self.CFG_FILE)
+      settings.setValue('confirm_exit_when_closing', self._confirm_exit_when_closing)
+
+  @property
+  def highlight_xml_blocks(self):
+    return self._highlight_xml_blocks
+
+  @highlight_xml_blocks.setter
+  def highlight_xml_blocks(self, value):
+    val = self.str2bool(value)
+    if self._highlight_xml_blocks != val:
+      self._highlight_xml_blocks = val
+      settings = self.qsettings(self.CFG_FILE)
+      settings.setValue('highlight_xml_blocks', self._highlight_xml_blocks)
 
   def str2bool(self, v):
     if isinstance(v, bool):
