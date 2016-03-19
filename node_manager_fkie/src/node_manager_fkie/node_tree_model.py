@@ -39,6 +39,7 @@ import roslib
 import rospy
 
 from master_discovery_fkie.master_info import NodeInfo
+from node_manager_fkie.name_resolution import NameResolution
 from parameter_handler import ParameterHandler
 import node_manager_fkie as nm
 
@@ -668,9 +669,12 @@ class HostItem(GroupItem):
 
   @property
   def address(self):
-    result = nm.nameres().resolve_cached(self._host)
-    if result:
-      return result[0]
+    if NameResolution.is_legal_ip(self._host):
+      return self._host
+    else:
+      result = nm.nameres().resolve_cached(self._host)
+      if result:
+        return result[0]
     return None
 
   @property
@@ -742,9 +746,9 @@ class HostItem(GroupItem):
     tooltip += '<p>'
     tooltip += '<a href="show_all_screens://%s">show all screens</a>'%(str(self.masteruri).replace('http://', ''))
     tooltip += '<p>'
-    if not nm.is_local(self.address):
-      tooltip += '<a href="poweroff://%s" title="calls `sudo poweroff` at `%s` via SSH">poweroff `%s`</a>' % (self.hostname, self.hostname, self.hostname)
-      tooltip += '<p>'
+#    if not nm.is_local(self.address):
+    tooltip += '<a href="poweroff://%s" title="calls `sudo poweroff` at `%s` via SSH">poweroff `%s`</a>' % (self.hostname, self.hostname, self.hostname)
+    tooltip += '<p>'
     tooltip += '<a href="remove_all_launch_server://%s">kill all launch server</a>'%str(self.masteruri).replace('http://', '')
     tooltip += '<p>'
     # get sensors
@@ -1046,7 +1050,7 @@ class NodeItem(QtGui.QStandardItem):
     elif self.has_running:
       self._state = NodeItem.STATE_DUPLICATE
       self.setIcon(QtGui.QIcon(':/icons/imacadam_stop.png'))
-      tooltip = '<h4>Where are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</h4>'
+      tooltip = '<h4>There are nodes with the same name on remote hosts running. These will be terminated, if you run this node! (Only if master_sync is running or will be started somewhere!)</h4>'
       self.setToolTip('<div>%s</div>'%tooltip)
     else:
       self._state = NodeItem.STATE_OFF
@@ -1296,7 +1300,7 @@ class NodeTreeModel(QtGui.QStandardItemModel):
     if masteruri is None:
       return None
     host = (masteruri, address)
-    local = (self.local_addr in [address, nm.nameres().resolve_cached(address)]
+    local = (self.local_addr in [address] + nm.nameres().resolve_cached(address)
              and self._local_masteruri == masteruri)
     # find the host item by address
     root = self.invisibleRootItem()
@@ -1378,6 +1382,8 @@ class NodeTreeModel(QtGui.QStandardItemModel):
       for p, (code_n, _, val) in params.items():#_:=msg_n
         nodename = roslib.names.namespace(p).rstrip(roslib.names.SEP)
         ns = roslib.names.namespace(nodename).rstrip(roslib.names.SEP)
+        if not ns:
+          ns = roslib.names.SEP
         available_ns.add(ns)
         if code_n == 1:
           # add group
