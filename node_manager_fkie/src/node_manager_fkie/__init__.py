@@ -34,8 +34,8 @@
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.5.2"  # git describe --tags --dirty --always
-__date__ = "2016-03-31"  # git log -1 --date=iso
+__version__ = "0.5.3"  # git describe --tags --dirty --always
+__date__ = "2016-04-01"  # git log -1 --date=iso
 
 import argparse
 import os
@@ -147,6 +147,16 @@ def file_watcher_param():
   '''
   return _FILE_WATCHER_PARAM
 
+def get_ros_hostname(url):
+  '''
+  Returns the host name used in a url, if it is a name. If it is an IP an
+  empty string will be returned.
+
+  @return: host or '' if url is an IP or invalid
+
+  @rtype:  C{str}
+  '''
+  return NameResolution.get_ros_hostname(url)
 
 def is_local(hostname, wait=False):
   '''
