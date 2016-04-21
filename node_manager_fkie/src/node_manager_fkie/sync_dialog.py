@@ -30,16 +30,18 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from python_qt_binding import QtGui
 from python_qt_binding import QtCore
-
+from python_qt_binding import QtGui
 import os
 import threading
 
+import rospy
+
+from node_manager_fkie.common import is_package
+from node_manager_fkie.detailed_msg_box import WarningMessageBox
+from node_manager_fkie.xml_editor import Editor
 import node_manager_fkie as nm
-from common import is_package
-from detailed_msg_box import WarningMessageBox
-from xml_editor import Editor
+
 
 class SyncHighlighter(QtGui.QSyntaxHighlighter):
   '''
@@ -292,7 +294,8 @@ class SyncDialog(QtGui.QDialog):
     if self._interfaces_files is None:
       self.interface_field.addItems(['interface searching...'])
       self.interface_field.setCurrentIndex(0)
-      self._fill_interface_thread = threading.Thread(target=self._fill_interfaces)
+      self._fill_interface_thread = InterfacesThread()
+      self._fill_interface_thread.interfaces.connect(self._fill_interfaces)
       self._fill_interface_thread.start()
     else:
       self.toolButton_EditInterface.setEnabled(self._interfaces_files.has_key(self.interface_field.currentText()))
@@ -301,16 +304,11 @@ class SyncDialog(QtGui.QDialog):
     self.interface_field.setFocus(QtCore.Qt.TabFocusReason)
     self.resize(350,80)
 
-  def _fill_interfaces(self):
-    if self._interfaces_files is None:
-      self.root_paths = [os.path.normpath(p) for p in os.getenv("ROS_PACKAGE_PATH").split(':')]
-      self._interfaces_files = {}
-      for p in self.root_paths:
-        ret = self._getInterfaces(p)
-        self._interfaces_files = dict(ret.items() + self._interfaces_files.items())
-      self.interface_field.clear()
-      self.interface_field.clearEditText()
-      self.interface_field.addItems(self._interfaces_files.keys())
+  def _fill_interfaces(self, interfaces_files):
+    self._interfaces_files = interfaces_files
+    self.interface_field.clear()
+    self.interface_field.clearEditText()
+    self.interface_field.addItems(self._interfaces_files.keys())
 
   def _on_interface_selected(self, interface):
     if self._interfaces_files and self._interfaces_files.has_key(interface):
@@ -431,6 +429,41 @@ class SyncDialog(QtGui.QDialog):
     self.buttonBox.clear()
     self.buttonBox.setStandardButtons(QtGui.QDialogButtonBox.Cancel)
     self.resize(350,160)
+
+
+class InterfacesThread(QtCore.QObject, threading.Thread):
+  '''
+  A thread to list all sync interface files and
+  publish there be sending a QT signal.
+  '''
+  interfaces = QtCore.Signal(dict)
+  '''
+  @ivar: interfaces is a signal, which is emitted, if a list with sync files was created.
+  '''
+
+  def __init__(self):
+    '''
+    '''
+    QtCore.QObject.__init__(self)
+    threading.Thread.__init__(self)
+    self._interfaces_files = None
+    self.setDaemon(True)
+
+  def run(self):
+    '''
+    '''
+    try:
+      # fill the input fields
+      self.root_paths = [os.path.normpath(p) for p in os.getenv("ROS_PACKAGE_PATH").split(':')]
+      self._interfaces_files = {}
+      for p in self.root_paths:
+        ret = self._getInterfaces(p)
+        self._interfaces_files = dict(ret.items() + self._interfaces_files.items())
+      self.interfaces.emit(self._interfaces_files)
+    except:
+      import traceback
+      formatted_lines = traceback.format_exc(1).splitlines()
+      rospy.logwarn("Error while list sync interfaces:\n\t%s", formatted_lines[-1])
 
   def _getInterfaces(self, path, package=None):
     result = {}
