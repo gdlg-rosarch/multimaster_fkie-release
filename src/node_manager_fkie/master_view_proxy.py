@@ -102,7 +102,7 @@ class MasterViewProxy(QtGui.QWidget):
   remove_config_signal  = QtCore.Signal(str)
   '''@ivar: the signal is emitted if a default_cfg was removed'''
 
-  description_signal  = QtCore.Signal(str, str)
+  description_signal = QtCore.Signal(str, str, bool)
   '''@ivar: the signal is emitted to show a description (title, description)'''
 
   request_xml_editor = QtCore.Signal(list, str)
@@ -1154,17 +1154,35 @@ class MasterViewProxy(QtGui.QWidget):
           # determine the count of publisher or subscriber
           count = None
           try:
-            count = len(self.__master_info.getTopic(i).publisherNodes) if list_type == 'TOPIC_SUB' else len(self.__master_info.getTopic(i).subscriberNodes)
+            tpc = self.__master_info.getTopic(i)
+            if list_type == 'TOPIC_SUB':
+              count = len(tpc.publisherNodes)
+              if name not in tpc.subscriberNodes:
+                count = None
+            else:
+              count = len(tpc.subscriberNodes)
+              if name not in tpc.publisherNodes:
+                count = None
           except:
             pass
-          item = '<a href="topic://%s">%s</a>'%(i, item_name)
-          item += '   <a href="topicecho://%s%s"><span style="color:gray;"><i>echo</i></span></a>'%(self.mastername, i)
           # add the count
-          if not count is None:
+          if count is not None:
+            item = '<a href="topic://%s">%s</a>' % (i, item_name)
+            item += '   <a href="topicecho://%s%s"><span style="color:gray;"><i>echo</i></span></a>' % (self.mastername, i)
             item = '<span style="color:gray;">_%d_/ </span>%s'%(count, item)
+          else:
+            item = '<a>%s</a>' % (item_name)
+            item = '<span style="color:red;">!sync </span>%s' % (item)
         elif list_type == 'SERVICE':
-          item = '<a href="service://%s%s">%s</a>'%(self.mastername, i, item_name)
-          item += '   <a href="servicecall://%s%s"><span style="color:gray;"><i>call</i></span></a>'%(self.mastername, i)
+          try:
+            srv = self.__master_info.getService(i)
+            if name in srv.serviceProvider:
+              item = '<a href="service://%s%s">%s</a>' % (self.mastername, i, item_name)
+              item += '   <a href="servicecall://%s%s"><span style="color:gray;"><i>call</i></span></a>' % (self.mastername, i)
+            else:
+              item = '<span style="color:red;">!sync </span>%s' % (item_name)
+          except:
+            item = '<span style="color:red;">!sync </span>%s' % (item_name)
         elif list_type == 'LAUNCH':
           item = '<a href="launch://%s">%s</a>'%(i, item_name)
           if i in self.__configs and self.masteruri in self.__configs[i].global_param_done:
@@ -1261,7 +1279,7 @@ class MasterViewProxy(QtGui.QWidget):
     current_tab = self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex())
     if (current_tab == 'Nodes' and self.__last_info_text != text) or force_emit:
       self.__last_info_text = text
-      self.description_signal.emit(name, text)
+      self.description_signal.emit(name, text, True if selected or deselected or force_emit else False)
     self.updateButtons()
 
   def get_node_description(self, node_name, node=None):
@@ -1324,8 +1342,12 @@ class MasterViewProxy(QtGui.QWidget):
 #        if len(node.diagnostic_array) > 1:
 #          text += '<dt><font color="#FF6600"><a href="view_diagnostics://%s">view recent %d items</a></font></dt>'%(node.name, len(node.diagnostic_array))
       text += '</dl>'
-      text += self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB', node.name)
-      text += self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB', node.name)
+      if nm.settings().transpose_pub_sub_descr:
+        text += self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB', node.name)
+        text += self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB', node.name)
+      else:
+        text += self._create_html_list('Published Topics:', node.published, 'TOPIC_PUB', node.name)
+        text += self._create_html_list('Subscribed Topics:', node.subscribed, 'TOPIC_SUB', node.name)
       text += self._create_html_list('Services:', node.services, 'SERVICE', node.name)
       # set loaunch file paths
       text += self._create_html_list('Loaded Launch Files:', launches, 'LAUNCH')
@@ -1362,7 +1384,7 @@ class MasterViewProxy(QtGui.QWidget):
       current_tab = self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex())
       if (current_tab == 'Topics' and self.__last_info_text != info_text) or force_emit:
         self.__last_info_text = info_text
-        self.description_signal.emit(topic.name, info_text)
+        self.description_signal.emit(topic.name, info_text, True if selected or deselected or force_emit else False)
 
   def get_topic_description(self, topic_name, topic=None):
     text = ''
@@ -1392,8 +1414,12 @@ class MasterViewProxy(QtGui.QWidget):
       if topic_publisher:
         text += '&nbsp;<a href="topicstop://%s%s"><img src=":icons/sekkyumu_topic_pub_stop_24.png" alt="stop"> [%d]</a>'%(self.mastername, topic.name, len(topic_publisher))
       text += '<p>'
-      text += self._create_html_list('Publisher:', topic.publisherNodes, 'NODE')
-      text += self._create_html_list('Subscriber:', topic.subscriberNodes, 'NODE')
+      if nm.settings().transpose_pub_sub_descr:
+        text += self._create_html_list('Subscriber:', topic.subscriberNodes, 'NODE')
+        text += self._create_html_list('Publisher:', topic.publisherNodes, 'NODE')
+      else:
+        text += self._create_html_list('Publisher:', topic.publisherNodes, 'NODE')
+        text += self._create_html_list('Subscriber:', topic.subscriberNodes, 'NODE')
       text += '<b><u>Type:</u></b> %s'%self._href_from_msgtype(topic.type)
       text += '<dl>'
       try:
@@ -1482,7 +1508,7 @@ class MasterViewProxy(QtGui.QWidget):
       current_tab = self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex())
       if (current_tab == 'Services' and self.__last_info_text != info_text) or force_emit:
         self.__last_info_text = info_text
-        self.description_signal.emit(service.name, info_text)
+        self.description_signal.emit(service.name, info_text, True if selected or deselected or force_emit else False)
 
   def _href_from_svrtype(self, srv_type):
     result = srv_type
