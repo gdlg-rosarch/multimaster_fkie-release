@@ -31,18 +31,21 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 
-import threading
-import xmlrpclib
 import random
 import socket
+import threading
+import xmlrpclib
 
-import roslib; roslib.load_manifest('master_sync_fkie')
+from multimaster_msgs_fkie.msg import SyncTopicInfo, SyncServiceInfo, SyncMasterInfo
 import roslib.message
 import rospy
 
 from master_discovery_fkie.common import masteruri_from_ros
 from master_discovery_fkie.filter_interface import FilterInterface
-from multimaster_msgs_fkie.msg import SyncTopicInfo, SyncServiceInfo, SyncMasterInfo
+
+
+import roslib; roslib.load_manifest('master_sync_fkie')
+
 
 class SyncThread(object):
   '''
@@ -106,7 +109,8 @@ class SyncThread(object):
                       ['/*get_loggers', '/*set_logger_level'], [],
                       # do not sync the bond message of the nodelets!!
                       ['bond/Status'],
-                      [], [])
+                      [], [],
+                      [])
 
     # congestion avoidance: wait for random.random*2 sec. If an update request 
     # is received try to cancel and restart the current timer. The timer can be
@@ -156,13 +160,13 @@ class SyncThread(object):
     '''
 #    rospy.logdebug("SyncThread[%s]: update request", self.name)
     with self.__lock_intern:
+      self.timestamp_remote = timestamp
       if (self.timestamp_local != timestamp):
         rospy.logdebug("SyncThread[%s]: update notify new timestamp(%.9f), old(%.9f)", self.name, timestamp, self.timestamp_local)
         self.name = name
         self.uri = uri
         self.discoverer_name = discoverer_name
         self.monitoruri = monitoruri
-        self.timestamp_remote = timestamp
         self._request_update()
 #    rospy.logdebug("SyncThread[%s]: update exit", self.name)
 
