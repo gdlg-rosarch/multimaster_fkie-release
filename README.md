@@ -1,3 +1,32 @@
+## multimaster_fkie (kinetic) - 0.5.5-0
+
+The packages in the `multimaster_fkie` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release multimaster_fkie --track kinetic --ros-distro kinetic` on `Tue, 30 Aug 2016 19:03:35 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+
+- upstream repository: http://github.com/fkie/multimaster_fkie.git
+- release repository: unknown
+- rosdistro version: `null`
+- old version: `null`
+- new version: `0.5.5-0`
+
+Versions of tools used:
+
+- bloom version: `0.5.22`
+- catkin_pkg version: `0.2.10`
+- rosdep version: `0.11.4`
+- rosdistro version: `0.4.7`
+- vcstools version: `0.1.38`
+
+
 ## multimaster_fkie (jade) - 0.5.5-0
 
 The packages in the `multimaster_fkie` repository were released into the `jade` distro by running `/usr/bin/bloom-release multimaster_fkie --track jade --ros-distro jade` on `Tue, 30 Aug 2016 18:47:23 -0000`
