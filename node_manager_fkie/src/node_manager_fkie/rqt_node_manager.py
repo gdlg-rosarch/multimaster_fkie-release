@@ -1,9 +1,16 @@
+try:
+    from python_qt_binding.QtGui import QMessageBox
+except:
+    from python_qt_binding.QtWidgets import QMessageBox
+
 from qt_gui.plugin import Plugin
-#from python_qt_binding import loadUi
-from python_qt_binding.QtGui import QMessageBox#, QWidget
+
 import node_manager_fkie
+
 from .main_window import MainWindow
 
+
+# from python_qt_binding import loadUi
 class NodeManager(Plugin):
 
     def __init__(self, context):
@@ -16,8 +23,8 @@ class NodeManager(Plugin):
         parser = ArgumentParser()
         # Add argument(s) to the parser.
         parser.add_argument("-q", "--quiet", action="store_true",
-                      dest="quiet",
-                      help="Put plugin in silent mode")
+                            dest="quiet",
+                            help="Put plugin in silent mode")
         args, unknowns = parser.parse_known_args(context.argv())
         if not args.quiet:
             print 'arguments: ', args
@@ -27,13 +34,13 @@ class NodeManager(Plugin):
         node_manager_fkie.init_globals(masteruri)
         # Create QWidget
         try:
-          self._widget = MainWindow()
+            self._widget = MainWindow()
 #          self._widget.read_view_history()
         except Exception, e:
-          msgBox = QMessageBox()
-          msgBox.setText(str(e))
-          msgBox.exec_()
-          raise
+            msgBox = QMessageBox()
+            msgBox.setText(str(e))
+            msgBox.exec_()
+            raise
         # Get path to UI file which is a sibling of this file
         # in this example the .ui and .py file are in the same folder
 #        ui_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'MyPlugin.ui')
@@ -41,10 +48,10 @@ class NodeManager(Plugin):
 #        loadUi(ui_file, self._widget)
         # Give QObjects reasonable names
         self._widget.setObjectName('NodeManagerFKIEPlugin')
-        # Show _widget.windowTitle on left-top of each plugin (when 
-        # it's set in _widget). This is useful when you open multiple 
-        # plugins at once. Also if you open multiple instances of your 
-        # plugin at once, these lines add number to make it easy to 
+        # Show _widget.windowTitle on left-top of each plugin (when
+        # it's set in _widget). This is useful when you open multiple
+        # plugins at once. Also if you open multiple instances of your
+        # plugin at once, these lines add number to make it easy to
         # tell from pane to pane.
         if context.serial_number() > 1:
             self._widget.setWindowTitle(self._widget.windowTitle() + (' (%d)' % context.serial_number()))
@@ -55,7 +62,7 @@ class NodeManager(Plugin):
         # TODO unregister all publishers here
         node_manager_fkie.finish()
         if self._widget:
-          self._widget.finish()
+            self._widget.finish()
 
     def save_settings(self, plugin_settings, instance_settings):
         # TODO save intrinsic configuration, usually using:
@@ -67,6 +74,6 @@ class NodeManager(Plugin):
         # v = instance_settings.value(k)
         pass
 
-    #def trigger_configuration(self):
+    # def trigger_configuration(self):
         # Comment in to signal that the plugin has a way to configure it
         # Usually used to open a configuration dialog

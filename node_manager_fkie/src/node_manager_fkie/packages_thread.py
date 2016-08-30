@@ -30,7 +30,7 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from python_qt_binding import QtCore
+from python_qt_binding.QtCore import QObject, Signal
 import os
 import threading
 
@@ -39,40 +39,40 @@ import rospy
 from .common import get_packages
 
 
-class PackagesThread(QtCore.QObject, threading.Thread):
-  '''
-  A thread to list all available ROS packages and
-  publish there be sending a QT signal.
-  '''
-  packages = QtCore.Signal(dict)
-  '''
+class PackagesThread(QObject, threading.Thread):
+    '''
+    A thread to list all available ROS packages and
+    publish there be sending a QT signal.
+    '''
+    packages = Signal(dict)
+    '''
   @ivar: packages is a signal, which is emitted, if a list with ROS packages was
   created {package : path}.
   '''
 
-  def __init__(self):
-    '''
-    '''
-    QtCore.QObject.__init__(self)
-    threading.Thread.__init__(self)
-    self.setDaemon(True)
+    def __init__(self):
+        '''
+        '''
+        QObject.__init__(self)
+        threading.Thread.__init__(self)
+        self.setDaemon(True)
 
-  def run(self):
-    '''
-    '''
-    try:
-      # fill the input fields
-      root_paths = [os.path.normpath(p) for p in os.getenv("ROS_PACKAGE_PATH").split(':')]
-      packages = {}
-      for p in root_paths:
-        ret = get_packages(p)
-        packages = dict(ret.items() + packages.items())
-      self.packages.emit(packages)
-    except:
-      import traceback
-      formatted_lines = traceback.format_exc(1).splitlines()
-      print "Error while list packages:\n\t%s" % traceback.format_exc()
-      try:
-        rospy.logwarn("Error while list packages:\n\t%s", formatted_lines[-1])
-      except:
-        pass
+    def run(self):
+        '''
+        '''
+        try:
+            # fill the input fields
+            root_paths = [os.path.normpath(p) for p in os.getenv("ROS_PACKAGE_PATH").split(':')]
+            packages = {}
+            for p in root_paths:
+                ret = get_packages(p)
+                packages = dict(ret.items() + packages.items())
+            self.packages.emit(packages)
+        except:
+            import traceback
+            formatted_lines = traceback.format_exc(1).splitlines()
+            print "Error while list packages:\n\t%s" % traceback.format_exc()
+            try:
+                rospy.logwarn("Error while list packages:\n\t%s", formatted_lines[-1])
+            except:
+                pass
