@@ -1,3 +1,32 @@
+## multimaster_fkie (jade) - 0.5.6-0
+
+The packages in the `multimaster_fkie` repository were released into the `jade` distro by running `/usr/bin/bloom-release multimaster_fkie --track jade --rosdistro jade` on `Thu, 01 Sep 2016 18:54:08 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+
+- upstream repository: http://github.com/fkie/multimaster_fkie.git
+- release repository: https://github.com/fkie-release/multimaster_fkie-release.git
+- rosdistro version: `0.5.5-0`
+- old version: `0.5.5-0`
+- new version: `0.5.6-0`
+
+Versions of tools used:
+
+- bloom version: `0.5.22`
+- catkin_pkg version: `0.2.10`
+- rosdep version: `0.11.4`
+- rosdistro version: `0.4.7`
+- vcstools version: `0.1.38`
+
+
 ## multimaster_fkie (indigo) - 0.5.6-0
 
 The packages in the `multimaster_fkie` repository were released into the `indigo` distro by running `/usr/bin/bloom-release multimaster_fkie --track indigo --rosdistro indigo` on `Thu, 01 Sep 2016 18:39:09 -0000`
