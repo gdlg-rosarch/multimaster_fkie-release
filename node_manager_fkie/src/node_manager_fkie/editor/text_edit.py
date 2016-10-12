@@ -352,13 +352,10 @@ class TextEdit(QTextEdit):
                 ext = os.path.splitext(self.filename)
                 # XML comment
                 if ext[1] in self.CONTEXT_FILE_EXT:
-                    if cursor.block().length() < 4:
-                        cursor.movePosition(QTextCursor.NextBlock)
-                        continue
                     # skipt the existing spaces at the start of the line
                     cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
                     while cursor.selectedText() in [' ', '\t']:
-                        cursor.setPosition(cursor.position() + 1, QTextCursor.MoveAnchor)
+                        cursor.setPosition(cursor.position(), QTextCursor.MoveAnchor)
                         cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
                     cursor.movePosition(QTextCursor.PreviousCharacter, 1)
                     cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 4)
@@ -380,7 +377,7 @@ class TextEdit(QTextEdit):
                             cursor.insertText('')
                             cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor, 1)
                     else:
-                        cursor.movePosition(QTextCursor.StartOfLine)
+                        cursor.setPosition(cursor.anchor())
                         cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
                         # only comment out, if no comments are found
                         if cursor.selectedText().find('<!--') < 0 and cursor.selectedText().find('-->') < 0:
@@ -388,7 +385,7 @@ class TextEdit(QTextEdit):
                             # skipt the current existing spaces
                             cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
                             while cursor.selectedText() in [' ', '\t']:
-                                cursor.setPosition(cursor.position() + 1, QTextCursor.MoveAnchor)
+                                cursor.setPosition(cursor.position(), QTextCursor.MoveAnchor)
                                 cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
                             cursor.movePosition(QTextCursor.PreviousCharacter, 1)
                             cursor.insertText('<!-- ')
