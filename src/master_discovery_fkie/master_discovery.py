@@ -315,7 +315,7 @@ class DiscoveredMaster(object):
         '''
         if self.monitoruri is not None:
             if not rospy.is_shutdown() and self.mastername is None:
-                timetosleep = 1
+                timetosleep = 5.
                 try:
                     rospy.logdebug("Get additional connection info from %s" % self.monitoruri)
                     remote_monitor = xmlrpclib.ServerProxy(self.monitoruri)
@@ -356,6 +356,13 @@ class DiscoveredMaster(object):
                             self._add_error(self.ERR_RESOLVE_NAME, msg)
                             self._get_into_timer = threading.Timer(3., self.__retrieve_masterinfo)
                             self._get_into_timer.start()
+                        except:
+                            import traceback
+                            msg = "resolve error [%s]: %s" % (self.monitoruri, traceback.format_exc())
+                            rospy.logwarn(msg)
+                            self._add_error(self.ERR_SOCKET, msg)
+                            self._get_into_timer = threading.Timer(timetosleep, self.__retrieve_masterinfo)
+                            self._get_into_timer.start()
                         else:
                             # publish new node
                             if self.callback_master_state is not None:
@@ -368,6 +375,18 @@ class DiscoveredMaster(object):
                                                                                  self.online,
                                                                                  self.discoverername,
                                                                                  self.monitoruri)))
+                            else:
+                                msg = "calback is None, should not happen...remove master %s" % self.monitoruri
+                                rospy.logwarn(msg)
+                                self._add_error(self.ERR_SOCKET, msg)
+                                self._get_into_timer = threading.Timer(timetosleep, self.__retrieve_masterinfo)
+                                self._get_into_timer.start()
+                    else:
+                        msg = "Got timestamp=0 from %s, retry... " % self.monitoruri
+                        rospy.logwarn(msg)
+                        self._add_error(self.ERR_SOCKET, msg)
+                        self._get_into_timer = threading.Timer(timetosleep, self.__retrieve_masterinfo)
+                        self._get_into_timer.start()
 
 
 class Discoverer(object):
@@ -654,7 +673,9 @@ class Discoverer(object):
             except:
                 pass
             # publish the current state
-            if not (self.master_monitor.getMasteruri() is None or rospy.is_shutdown() or self.do_finish):
+            invalid_uri = (self.master_monitor.getMasteruri() is None)
+            invalid_state = (self.master_monitor.getCurrentState() is None)
+            if not (invalid_uri or invalid_state or rospy.is_shutdown() or self.do_finish):
                 self._send_current_state2group()
                 try:
                     # send update requests to group
@@ -841,13 +862,14 @@ class Discoverer(object):
                             # is it a request to update the state
                             # send the current master state to the sender address
                             # TODO: add a filter, if multicast messages are disabled?
-                            if is_multicast:
-                                rospy.logdebug("Received a multicast request for a state update from %s" % address[0])
-                                self._ts_received_mcast_request = time.time()
-                                self._send_current_state2group()
-                            else:
-                                rospy.logdebug("Received a request for a state update from %s" % (address[0]))
-                                self._send_current_state2addr(address[0])
+                            if self.master_monitor.getCurrentState() is not None:
+                                if is_multicast:
+                                    rospy.logdebug("Received a multicast request for a state update from %s" % address[0])
+                                    self._ts_received_mcast_request = time.time()
+                                    self._send_current_state2group()
+                                else:
+                                    rospy.logdebug("Received a request for a state update from %s" % (address[0]))
+                                    self._send_current_state2addr(address[0])
                             add_to_list = master_key not in self.masters
                         elif secs == -1 or secs_l == -1:
                             # remove master if sec and nsec are -1
