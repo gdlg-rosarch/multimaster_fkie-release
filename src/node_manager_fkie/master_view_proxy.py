@@ -33,28 +33,19 @@
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QRegExp, Qt, Signal
 from python_qt_binding.QtGui import QKeySequence
-try:
-    from python_qt_binding.QtGui import QAction, QFileDialog, QMenu, QMessageBox, QShortcut, QWidget
-    from python_qt_binding.QtGui import QApplication, QVBoxLayout
-except:
-    from python_qt_binding.QtWidgets import QAction, QFileDialog, QMenu, QMessageBox, QShortcut, QWidget
-    from python_qt_binding.QtWidgets import QApplication, QVBoxLayout
-
-
+from rosgraph.names import is_legal_name
 from urlparse import urlparse
 import getpass
 import os
 import re
+import roslib
+import rospy
 import socket
 import sys
 import time
 import traceback
 import uuid
 import xmlrpclib
-
-from rosgraph.names import is_legal_name
-import roslib
-import rospy
 
 from master_discovery_fkie.master_info import NodeInfo
 from node_manager_fkie.common import masteruri_from_ros, get_packages, package_name, resolve_paths
@@ -74,6 +65,12 @@ from node_manager_fkie.start_handler import AdvRunCfg
 from node_manager_fkie.supervised_popen import SupervisedPopen
 from node_manager_fkie.topic_list_model import TopicModel, TopicItem
 import node_manager_fkie as nm
+try:
+    from python_qt_binding.QtGui import QAction, QFileDialog, QMenu, QMessageBox, QShortcut, QWidget
+    from python_qt_binding.QtGui import QApplication, QVBoxLayout
+except:
+    from python_qt_binding.QtWidgets import QAction, QFileDialog, QMenu, QMessageBox, QShortcut, QWidget
+    from python_qt_binding.QtWidgets import QApplication, QVBoxLayout
 
 
 try:
@@ -1227,7 +1224,9 @@ class MasterViewProxy(QWidget):
         if node_name and self.master_info is not None:
             # get node by name
             selectedNodes = self.getNode(node_name)
-            if selectedNodes[0] is None:
+            if not selectedNodes or selectedNodes[0] is None:
+                if node_name:
+                    self.description_signal.emit(node_name, "<b>%s</b> not found" % node_name, True if selected or deselected or force_emit else False)
                 return
             selectedHosts = []
             selections = []
@@ -1238,30 +1237,13 @@ class MasterViewProxy(QWidget):
             selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
             selectedHosts = self.hostsFromIndexes(selections)
             selectedNodes = self.nodesFromIndexes(selections)
+            selectedGroups = self.groupsFromIndexes(selections)
         self.masterTab.topicsView.selectionModel().clear()
         self.masterTab.servicesView.selectionModel().clear()
         name = ''
         text = ''
-        # add host description, if only the one host is selected
-        if len(selectedHosts) == 1:  # and len(selections) / 2 == 1:
-            host = selectedHosts[0]
-            name = '%s - Robot' % host.name
-            text = host.generateDescription()
-            text += '<br>'
-        else:
-            # add group description, if only the one group is selected
-            selectedGroups = self.groupsFromIndexes(selections)
-            if len(selectedGroups) == 1 and len(selections) / 2 == 1:
-                group = selectedGroups[0]
-                name = '%s - Group' % group.name
-                text = group.generateDescription()
-                text += '<br>'
-        # add node description for one selected node
-        if len(selectedHosts) != 1 and len(selectedNodes) == 1:
-            node = selectedNodes[0]
-            text = self.get_node_description(node_name, node)
-            name = node.name
-        elif len(selectedNodes) > 1:
+        # add control buttons for more then one selected node
+        if len(selectedNodes) > 1 or selectedGroups > 0:
             restartable_nodes = [sn for sn in selectedNodes if len(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
             restartable_nodes_with_launchfiles = [sn for sn in selectedNodes if sn.has_launch_cfgs(sn.cfgs) > 0 and not self._is_in_ignore_list(sn.name)]
             killable_nodes = [sn for sn in selectedNodes if sn.node_info.pid is not None and not self._is_in_ignore_list(sn.name)]
@@ -1279,7 +1261,24 @@ class MasterViewProxy(QWidget):
                 text += '&nbsp;<a href="start_node_adv://all_selected_nodes" title="Start %s nodes with additional options, e.g. loglevel"><img src=":icons/sekkyumu_play_alt_24.png" alt="play alt">[%d]</a>' % (len(restartable_nodes_with_launchfiles), len(restartable_nodes_with_launchfiles))
             if unregisterble_nodes:
                 text += '<br><a href="unregister_node://all_selected_nodes">unregister [%d]</a>' % len(unregisterble_nodes)
-
+        # add host description, if only the one host is selected
+        if len(selectedHosts) == 1:  # and len(selections) / 2 == 1:
+            host = selectedHosts[0]
+            name = '%s - Robot' % host.name
+            text += host.generateDescription()
+            text += '<br>'
+        else:
+            # add group description, if only the one group is selected
+            if len(selectedGroups) == 1 and len(selections) / 2 == 1:
+                group = selectedGroups[0]
+                name = '%s - Group' % group.name
+                text += group.generateDescription()
+                text += '<br>'
+        # add node description for one selected node
+        if len(selectedHosts) != 1 and len(selectedNodes) == 1 and len(selectedGroups) == 0:
+            node = selectedNodes[0]
+            text = self.get_node_description(node_name, node)
+            name = node.name
         current_tab = self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex())
         if (current_tab == 'Nodes' and self.__last_info_text != text) or force_emit:
             self.__last_info_text = text

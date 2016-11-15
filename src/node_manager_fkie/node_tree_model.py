@@ -33,10 +33,9 @@
 from python_qt_binding.QtCore import QFile, Qt, Signal
 from python_qt_binding.QtGui import QIcon, QStandardItem, QStandardItemModel
 import re
-import traceback
-
 import roslib
 import rospy
+import traceback
 
 from master_discovery_fkie.master_info import NodeInfo
 from node_manager_fkie.name_resolution import NameResolution
@@ -505,7 +504,7 @@ class GroupItem(QStandardItem):
                 result += ' <span style="color:gray;">[%d]</span>' % len(items)
             result += '<ul><span></span><br>'
             for i in items:
-                result += '<a href="node://%s%s">%s</a><br>' % (self.name, i, i)
+                result += '<a href="node://%s">%s</a><br>' % (i, i)
             result += '</ul>'
         return result
 
@@ -770,28 +769,28 @@ class HostItem(GroupItem):
 
     def __eq__(self, item):
         '''
-        Compares the address of the host.
+        Compares the address of the masteruri.
         '''
         if isinstance(item, str) or isinstance(item, unicode):
             rospy.logwarn("compare HostItem with unicode depricated")
             return False
         elif isinstance(item, tuple):
-            return self.host == item[1]
+            return self.masteruri == item[0]
         elif isinstance(item, HostItem):
-            return self.host == item.host
+            return self.masteruri == item.masteruri
         return False
 
     def __gt__(self, item):
         '''
-        Compares the address of the host.
+        Compares the address of the masteruri.
         '''
         if isinstance(item, str) or isinstance(item, unicode):
             rospy.logwarn("compare HostItem with unicode depricated")
             return False
         elif isinstance(item, tuple):
-            return self.host > item[1]
+            return self.masteruri > item[0]
         elif isinstance(item, HostItem):
-            return self.host > item.host
+            return self.masteruri > item.masteruri
         return False
 
 
@@ -1317,7 +1316,7 @@ class NodeTreeModel(QStandardItemModel):
         addresses = []
         for (name, node) in nodes.items():
             addr = nm.nameres().getHostname(node.uri if node.uri is not None else node.masteruri)
-            addresses.append(addr)
+            addresses.append(node.masteruri)
             host = (node.masteruri, addr)
             if host not in hosts:
                 hosts[host] = dict()
@@ -1333,7 +1332,7 @@ class NodeTreeModel(QStandardItemModel):
         # update nodes of the hosts, which are not more exists
         for i in reversed(range(self.invisibleRootItem().rowCount())):
             host = self.invisibleRootItem().child(i)
-            if host.host not in addresses:
+            if host.masteruri not in addresses:
                 host.updateRunningNodeState({})
         self.removeEmptyHosts()
         # update the duplicate state
