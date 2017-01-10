@@ -34,15 +34,14 @@ from SimpleXMLRPCServer import SimpleXMLRPCServer
 from SocketServer import ThreadingMixIn
 from datetime import datetime
 import cStringIO
+import roslib.network
+import rospy
 import socket
 import subprocess
 import threading
 import time
 import traceback
 import xmlrpclib
-
-import roslib.network
-import rospy
 
 import interface_finder
 
@@ -216,6 +215,11 @@ class MasterMonitor(object):
         Shutdown the RPC Server.
         '''
         if hasattr(self, 'rpcServer'):
+            if self._timer_update_launch_uris is not None:
+                try:
+                    self._timer_update_launch_uris.cancel()
+                except:
+                    pass
             if self._master is not None:
                 rospy.loginfo("Unsubscribe from parameter `/roslaunch/uris`")
                 try:
@@ -224,8 +228,6 @@ class MasterMonitor(object):
                     rospy.logwarn("Error while unsubscribe from `/roslaunch/uris`: %s" % e)
             rospy.loginfo("shutdown own RPC server")
             self.rpcServer.shutdown()
-            if self._timer_update_launch_uris is not None:
-                self._timer_update_launch_uris.cancel()
             del self.rpcServer.socket
             del self.rpcServer
 
@@ -750,6 +752,13 @@ class MasterMonitor(object):
             with self._state_access_lock:
                 if s != self.__master_state:
                     do_update = True
+                if self.__master_state is not None and s.timestamp < self.__master_state.timestamp:
+                    do_update = True
+                    result = True
+                    timejump_msg = "Timejump into past detected! Restart all ROS nodes, includes master_discovery, please!"
+                    rospy.logwarn(timejump_msg)
+                    if timejump_msg not in self._master_errors:
+                        self._master_errors.append(timejump_msg)
             if do_update:
                 self.updateSyncInfo()
                 with self._state_access_lock:
