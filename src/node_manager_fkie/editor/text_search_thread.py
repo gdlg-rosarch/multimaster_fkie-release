@@ -33,9 +33,8 @@
 from python_qt_binding.QtCore import QObject, Signal
 from python_qt_binding.QtCore import QRegExp, QFile
 import os
-import threading
-
 import rospy
+import threading
 
 import node_manager_fkie as nm
 
@@ -46,9 +45,9 @@ class TextSearchThread(QObject, threading.Thread):
     '''
     A thread to search recursive for a text in files.
     '''
-    search_result_signal = Signal(str, bool, str, int)
+    search_result_signal = Signal(str, bool, str, int, int, str)
     ''' @ivar: A signal emitted after search_threaded was started.
-        (search text, found or not, file, position in text)
+        (search text, found or not, file, position in text, line number, line text)
         for each result a signal will be emitted.
     '''
     warning_signal = Signal(str)
@@ -83,11 +82,11 @@ class TextSearchThread(QObject, threading.Thread):
             import traceback
             # print traceback.print_exc()
             formatted_lines = traceback.format_exc(1).splitlines()
-            rospy.logwarn("Error while search for '%s' in '%s': %s", (self._search_text, self._path, formatted_lines[-1]))
+            rospy.logwarn("Error while search for '%s' in '%s': %s" % (self._search_text, self._path, formatted_lines[-1]))
             self.warning_signal.emit(formatted_lines[-1])
         finally:
             if self._isrunning:
-                self.search_result_signal.emit(self._search_text, False, '', -1)
+                self.search_result_signal.emit(self._search_text, False, '', -1, -1, '')
 
     def search(self, search_text, path, recursive=False):
         '''
@@ -102,7 +101,7 @@ class TextSearchThread(QObject, threading.Thread):
         slen = len(search_text)
         while pos != -1 and self._isrunning:
             if self._isrunning:
-                self.search_result_signal.emit(search_text, True, path, pos)
+                self.search_result_signal.emit(search_text, True, path, pos, data.count('\n', 0, pos) + 1, self._strip_text(data, pos))
             pos += slen
             pos = data.find(search_text, pos)
         if self._isrunning:
@@ -148,3 +147,12 @@ class TextSearchThread(QObject, threading.Thread):
                 pos += reg.matchedLength()
                 pos = reg.indexIn(data, pos)
         return result
+
+    def _strip_text(self, data, pos):
+        start = pos
+        end = pos
+        while start > 0 and data[start - 1] not in ['\n', '\0', '\r']:
+            start -= 1
+        while end < len(data) and data[end] not in ['\n', '\0', '\r']:
+            end += 1
+        return data[start:end].strip()
