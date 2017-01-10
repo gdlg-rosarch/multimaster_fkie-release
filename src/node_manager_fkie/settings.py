@@ -30,8 +30,10 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+from python_qt_binding.QtGui import QColor
 import os
 import roslib
+import rospy
 
 from node_manager_fkie.common import get_ros_home, masteruri_from_ros
 
@@ -119,8 +121,11 @@ class Settings(object):
     START_SYNC_WITH_DISCOVERY = False
     CONFIRM_EXIT_WHEN_CLOSING = True
     HIGHLIGHT_XML_BLOCKS = True
+    COLORIZE_HOSTS = True
 
     TRANSPOSE_PUB_SUB_DESCR = True
+
+    DEAFULT_HOST_COLORS = [QColor(255, 255, 235).rgb()]
 
     def __init__(self):
         self.reload()
@@ -176,7 +181,14 @@ class Settings(object):
         self._start_sync_with_discovery = self.str2bool(settings.value('start_sync_with_discovery', self.START_SYNC_WITH_DISCOVERY))
         self._confirm_exit_when_closing = self.str2bool(settings.value('confirm_exit_when_closing', self.CONFIRM_EXIT_WHEN_CLOSING))
         self._highlight_xml_blocks = self.str2bool(settings.value('highlight_xml_blocks', self.HIGHLIGHT_XML_BLOCKS))
+        self._colorize_hosts = self.str2bool(settings.value('colorize_hosts', self.COLORIZE_HOSTS))
         self._transpose_pub_sub_descr = self.str2bool(settings.value('transpose_pub_sub_descr', self.TRANSPOSE_PUB_SUB_DESCR))
+        settings.beginGroup('host_colors')
+        self._host_colors = dict()
+        for k in settings.childKeys():
+            self._host_colors[k] = settings.value(k, None)
+        settings.endGroup()
+        self.init_hosts_color_list()
 
     def masteruri(self):
         return self._masteruri
@@ -390,6 +402,18 @@ class Settings(object):
             settings.setValue('highlight_xml_blocks', self._highlight_xml_blocks)
 
     @property
+    def colorize_hosts(self):
+        return self._colorize_hosts
+
+    @colorize_hosts.setter
+    def colorize_hosts(self, value):
+        val = self.str2bool(value)
+        if self._colorize_hosts != val:
+            self._colorize_hosts = val
+            settings = self.qsettings(self.CFG_FILE)
+            settings.setValue('colorize_hosts', self._colorize_hosts)
+
+    @property
     def transpose_pub_sub_descr(self):
         return self._transpose_pub_sub_descr
 
@@ -400,6 +424,26 @@ class Settings(object):
             self._transpose_pub_sub_descr = val
             settings = self.qsettings(self.CFG_FILE)
             settings.setValue('transpose_pub_sub_descr', self._transpose_pub_sub_descr)
+
+    def host_color(self, host, default_color):
+        if self.colorize_hosts:
+            # get the color from settings file
+            if host in self._host_colors:
+                result = self._host_colors[host]
+                if isinstance(result, (unicode, str)):
+                    return long(result)
+                return result
+            else:
+                # determine a color
+                index = abs(hash(host)) % len(self.DEAFULT_HOST_COLORS)
+                return self.DEAFULT_HOST_COLORS[index]
+        return default_color
+
+    def set_host_color(self, host, color):
+        if host and color:
+            self._host_colors[host] = color
+            settings = self.qsettings(self.CFG_FILE)
+            settings.setValue('host_colors/%s' % host, color)
 
     def str2bool(self, v):
         if isinstance(v, bool):
@@ -419,7 +463,7 @@ class Settings(object):
         except:
             return []
 
-    def terminal_cmd(self, cmd, title):
+    def terminal_cmd(self, cmd, title, noclose=False):
         '''
         Creates a command string to run with a terminal prefix
         @param cmd: the list with a command and args
@@ -429,6 +473,7 @@ class Settings(object):
         @return: command with a terminal prefix
         @rtype:  str
         '''
+        noclose_str = '-hold'
         if self._terminal_emulator is None:
             self._terminal_emulator = ""
             for t in ['/usr/bin/x-terminal-emulator', '/usr/bin/xterm']:
@@ -436,11 +481,22 @@ class Settings(object):
                     # workaround to support the command parameter in different terminal
                     if os.path.basename(os.path.realpath(t)) in ['terminator', 'gnome-terminal', 'xfce4-terminal']:
                         self._terminal_command_arg = 'x'
+                    else:
+                        self._terminal_command_arg = 'e'
+                    if os.path.basename(os.path.realpath(t)) in ['terminator', 'gnome-terminal', 'gnome-terminal.wrapper']:
+                        noclose_str = '--profile hold'
+                        if noclose:
+                            rospy.loginfo("If your terminal close after the execution, you can change this behavior in "
+                                          "profiles. You can also create a profile with name 'hold'. This profile will "
+                                          "be then load by node_manager.")
+                    elif os.path.basename(os.path.realpath(t)) in ['xfce4-terminal']:
+                        noclose_str = ''
                     self._terminal_emulator = t
                     break
         if self._terminal_emulator == "":
             return ""
-        return '%s -T "%s" -%s %s' % (self._terminal_emulator, title, self._terminal_command_arg, ' '.join(cmd))
+        noclose_str = noclose_str if noclose else ""
+        return '%s -T "%s" %s -%s %s' % (self._terminal_emulator, title, noclose_str, self._terminal_command_arg, ' '.join(cmd))
 
     def qsettings(self, settings_file):
         from python_qt_binding.QtCore import QSettings
@@ -448,3 +504,55 @@ class Settings(object):
         if not settings_file.startswith(os.path.sep):
             path = os.path.join(self.cfg_path, settings_file)
         return QSettings(path, QSettings.IniFormat)
+
+    def init_hosts_color_list(self):
+        self.DEAFULT_HOST_COLORS = [
+            QColor(255, 255, 235).rgb(),
+            QColor(87, 93, 94).rgb(),
+            QColor(205, 186, 136).rgb(),
+            QColor(249, 168, 0).rgb(),
+            QColor(232, 140, 0).rgb(),
+            QColor(175, 128, 79).rgb(),
+            QColor(221, 175, 39).rgb(),
+            QColor(227, 217, 198).rgb(),
+            QColor(186, 72, 27).rgb(),
+            QColor(246, 120, 40).rgb(),
+            QColor(255, 77, 6).rgb(),
+            QColor(89, 25, 31).rgb(),
+            QColor(216, 160, 166).rgb(),
+            QColor(129, 97, 131).rgb(),
+            QColor(196, 97, 140).rgb(),
+            QColor(118, 104, 154).rgb(),
+            QColor(188, 64, 119).rgb(),
+            QColor(0, 56, 123).rgb(),
+            QColor(15, 76, 100).rgb(),
+            QColor(0, 137, 182).rgb(),
+            QColor(99, 125, 150).rgb(),
+            QColor(5, 139, 140).rgb(),
+            QColor(34, 45, 90).rgb(),
+            QColor(60, 116, 96).rgb(),
+            QColor(54, 103, 53).rgb(),
+            QColor(80, 83, 60).rgb(),
+            QColor(17, 66, 50).rgb(),
+            QColor(108, 124, 89).rgb(),
+            QColor(97, 153, 59).rgb(),
+            QColor(185, 206, 172).rgb(),
+            QColor(0, 131, 81).rgb(),
+            QColor(126, 186, 181).rgb(),
+            QColor(0, 181, 26).rgb(),
+            QColor(122, 136, 142).rgb(),
+            QColor(108, 110, 107).rgb(),
+            QColor(118, 106, 94).rgb(),
+            QColor(56, 62, 66).rgb(),
+            QColor(128, 128, 118).rgb(),
+            QColor(127, 130, 116).rgb(),
+            QColor(197, 199, 196).rgb(),
+            QColor(137, 105, 62).rgb(),
+            QColor(112, 69, 42).rgb(),
+            QColor(141, 73, 49).rgb(),
+            QColor(90, 56, 38).rgb(),
+            QColor(233, 224, 210).rgb(),
+            QColor(236, 236, 231).rgb(),
+            QColor(43, 43, 44).rgb(),
+            QColor(121, 123, 122)
+        ]
