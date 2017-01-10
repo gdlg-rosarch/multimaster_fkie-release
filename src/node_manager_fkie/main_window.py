@@ -31,21 +31,22 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from datetime import datetime
-from python_qt_binding import loadUi
+from multimaster_msgs_fkie.msg import MasterState
+from python_qt_binding import loadUi, QT_BINDING_VERSION
 from python_qt_binding.QtCore import QFile, QPoint, QSize, Qt, QTimer, Signal
 from python_qt_binding.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap
+from python_qt_binding.QtGui import QPalette, QColor
 import getpass
 import os
+import roslib
+import rospy
 import socket
 import time
 import uuid
 import xmlrpclib
 
-from multimaster_msgs_fkie.msg import MasterState
-import roslib
-import rospy
-
 from master_discovery_fkie.common import resolve_url
+
 import node_manager_fkie as nm
 
 from .capability_table import CapabilityTable
@@ -67,12 +68,14 @@ from .select_dialog import SelectDialog
 from .settings_widget import SettingsWidget
 from .sync_dialog import SyncDialog
 from .update_handler import UpdateHandler
+
+
 try:
     from python_qt_binding.QtGui import QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedLayout, QWidget
-    from python_qt_binding.QtGui import QShortcut, QVBoxLayout
+    from python_qt_binding.QtGui import QShortcut, QVBoxLayout, QColorDialog, QDialog, QRadioButton
 except:
     from python_qt_binding.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedLayout, QWidget
-    from python_qt_binding.QtWidgets import QShortcut, QVBoxLayout
+    from python_qt_binding.QtWidgets import QShortcut, QVBoxLayout, QColorDialog, QDialog, QRadioButton
 
 
 try:
@@ -141,6 +144,10 @@ class MainWindow(QMainWindow):
 
         menu_rqt = MenuRqt(self.rqtButton)
         menu_rqt.start_rqt_plugin_signal.connect(self.on_rqt_plugin_start)
+
+        pal = self.expert_tab.palette()
+        self._default_color = pal.color(QPalette.Window)
+        self._set_custom_colors()
 
         # setup settings widget
         self.settings_dock = SettingsWidget(self)
@@ -275,6 +282,7 @@ class MainWindow(QMainWindow):
 #                        '%s'%e).exec_()
 
         self.imageLabel.mouseDoubleClickEvent = self.image_mouseDoubleClickEvent
+        self.masternameLabel.mouseDoubleClickEvent = self.mastername_mouseDoubleClickEvent
 
         try:
             self.readSettings()
@@ -952,42 +960,54 @@ class MainWindow(QMainWindow):
 
     def on_set_time_clicked(self):
         if self.currentMaster is not None:  # and not self.currentMaster.is_local:
-            ret = QMessageBox.question(self, 'Set Time', 'Change time on remote host: %s?' % nm.nameres().getHostname(self.currentMaster.master_state.uri), QMessageBox.Yes, QMessageBox.No)
-            if ret == QMessageBox.Yes:
+            time_dialog = QDialog()
+            ui_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'TimeInput.ui')
+            loadUi(ui_file, time_dialog)
+            host = nm.nameres().getHostname(self.currentMaster.master_state.uri)
+            time_dialog.setWindowTitle('Set time on %s' % host)
+            time_dialog.hostsComboBox.addItems(nm.history().cachedParamValues('/ntp'))
+            if self.currentMaster.is_local:
+                time_dialog.dateFrame.setVisible(False)
+            if time_dialog.exec_():
                 running_nodes = self.currentMaster.getRunningNodesIfLocal(remove_system_nodes=True)
                 if running_nodes:
                     ret = QMessageBox.question(self, 'Set Time', 'There are running nodes. Stop them?', QMessageBox.Yes, QMessageBox.No)
                     if ret == QMessageBox.Yes:
                         self.currentMaster.stop_nodes_by_name(running_nodes)
-                try:
-                    rospy.loginfo("Set remote host time to local time: %s" % self.currentMaster.master_state.uri)
-                    socket.setdefaulttimeout(10)
-                    p = xmlrpclib.ServerProxy(self.currentMaster.master_state.monitoruri)
-                    uri, success, newtime, errormsg = p.setTime(time.time())
-                    if not success:
-                        if errormsg.find('password') > -1:
-                            errormsg += "\nPlease modify /etc/sudoers and add user privilege, e.g:"
-                            errormsg += "\n%s  ALL=NOPASSWD: /bin/date" % self.currentMaster.current_user
-                            errormsg += "\n!!!needed to be at the very end of file, don't forget a new line at the end!!!"
-                            errormsg += "\n\nBe aware, it does not replace the time synchronization!"
-                            errormsg += "\nIt sets approximate time without undue delays on communication layer."
-                        WarningMessageBox(QMessageBox.Warning, "Time set error",
-                                          'Error while set time on %s' % uri,
+                if time_dialog.dateRadioButton.isChecked():
+                    try:
+                        rospy.loginfo("Set remote host time to local time: %s" % self.currentMaster.master_state.uri)
+                        socket.setdefaulttimeout(10)
+                        p = xmlrpclib.ServerProxy(self.currentMaster.master_state.monitoruri)
+                        uri, success, newtime, errormsg = p.setTime(time.time())
+                        if not success:
+                            if errormsg.find('password') > -1:
+                                errormsg += "\nPlease modify /etc/sudoers with sudoedit and add user privilege, e.g:"
+                                errormsg += "\n%s  ALL=NOPASSWD: /bin/date" % self.currentMaster.current_user
+                                errormsg += "\n!!!needed to be at the very end of file, don't forget a new line at the end!!!"
+                                errormsg += "\n\nBe aware, it does not replace the time synchronization!"
+                                errormsg += "\nIt sets approximate time without undue delays on communication layer."
+                            WarningMessageBox(QMessageBox.Warning, "Time set error",
+                                              'Error while set time on %s' % uri, '%s' % errormsg).exec_()
+                        else:
+                            timediff = time.time() - newtime
+                            rospy.loginfo("  New time difference to %s is approx.: %.3fs" % (self.currentMaster.master_state.uri, timediff))
+                            self.on_master_timediff_retrieved(self.currentMaster.master_state.uri, timediff)
+                    except Exception as e:
+                        errormsg = '%s' % e
+                        if errormsg.find('setTime') > -1:
+                            errormsg += "\nUpdate remote multimaster_fkie!"
+                        rospy.logwarn("Error while set time on %s: %s" % (self.currentMaster.master_state.uri, errormsg))
+                        WarningMessageBox(QMessageBox.Warning, "Time sync error",
+                                          'Error while set time on %s' % self.currentMaster.master_state.uri,
                                           '%s' % errormsg).exec_()
-                    else:
-                        timediff = time.time() - newtime
-                        rospy.loginfo("  New time difference to %s is approx.: %.3fs" % (self.currentMaster.master_state.uri, timediff))
-                        self.on_master_timediff_retrieved(self.currentMaster.master_state.uri, timediff)
-                except Exception as e:
-                    errormsg = '%s' % e
-                    if errormsg.find('setTime') > -1:
-                        errormsg += "\nUpdate remote multimaster_fkie!"
-                    rospy.logwarn("Error while set time on %s: %s" % (self.currentMaster.master_state.uri, errormsg))
-                    WarningMessageBox(QMessageBox.Warning, "Time sync error",
-                                      'Error while set time on %s' % self.currentMaster.master_state.uri,
-                                      '%s' % errormsg).exec_()
-                finally:
-                    socket.setdefaulttimeout(None)
+                    finally:
+                        socket.setdefaulttimeout(None)
+                elif time_dialog.ntpdateRadioButton.isChecked():
+                    ntp_host = time_dialog.hostsComboBox.currentText()
+                    nm.history().addParamCache('/ntp', ntp_host)
+                    cmd = "%s %s" % (time_dialog.ntpdateRadioButton.text(), ntp_host)
+                    nm.starter().ntpdate(host, cmd)
 
     def on_refresh_master_clicked(self):
         if self.currentMaster is not None:
@@ -1028,19 +1048,48 @@ class MainWindow(QMainWindow):
         if self.currentMaster is not None:
             try:
                 args = []
-                tool = 'rqt_gui'
-                prefix = 'rqt'
+                package = 'rqt_gui'
+                binary = 'rqt_gui'
+                prefix = 'rqt_'
+                suffix = ''
                 if name == 'RViz':
-                    prefix = 'rviz'
-                    tool = 'rviz'
+                    prefix = 'rviz_'
+                    package = 'rviz'
+                    binary = 'rviz'
                 if plugin:
                     args = ['-s', plugin]
-                node_name = '%s_%s_%s' % (prefix, name.lower().replace(' ', '_'),
-                                          self.currentMaster.master_state.name.replace('-', '_'))
+                if name == 'rosbag record':
+                    package = 'rosbag'
+                    binary = 'record'
+                    prefix = ''
+                    topic_names = []
+                    current_tab = self.currentMaster.masterTab.tabWidget.tabText(self.currentMaster.masterTab.tabWidget.currentIndex())
+                    if (current_tab == 'Nodes'):
+                        nodes = self.currentMaster.nodesFromIndexes(self.currentMaster.masterTab.nodeTreeView.selectionModel().selectedIndexes())
+                        if nodes:
+                            for n in nodes:
+                                topic_names.extend(n.published)
+                    else:
+                        topics = self.currentMaster.topicsFromIndexes(self.currentMaster.masterTab.topicsView.selectionModel().selectedIndexes())
+                        if topics:
+                            topic_names.extend([t.name for t in topics])
+                    count_topics = 'ALL'
+                    if topic_names:
+                        args = [' '.join(topic_names)]
+                        count_topics = '%d selected' % len(topic_names)
+                    else:
+                        args = ['-a']
+                    ret = QMessageBox.question(self, 'Start rosbag', 'Start rosbag record with %s topics to %s/record_TIMESTAMP?' % (count_topics, nm.settings().LOG_PATH), QMessageBox.Yes, QMessageBox.No)
+                    if ret == QMessageBox.No:
+                        return
+                    args.append("-o %s/record" % nm.settings().LOG_PATH)
+                    suffix = "_%d" % int(time.time())
+                node_name = '%s%s_%s%s' % (prefix, name.lower().replace(' ', '_'),
+                                           self.currentMaster.master_state.name.replace('-', '_'), suffix)
                 self.currentMaster._progress_queue.add2queue(str(uuid.uuid4()),
                                                              'start %s' % name,
                                                              nm.starter().runNodeWithoutConfig,
-                                                             ('localhost', tool, tool,
+                                                             ('localhost', package, binary,
                                                               node_name, args,
                                                               '%s' % self.currentMaster.master_state.uri,
                                                               False))
@@ -1191,6 +1240,8 @@ class MainWindow(QMainWindow):
         if self.__current_master_label_name != name:
             self.__current_master_label_name = name
             self.masternameLabel.setText('<span style=" font-size:14pt; font-weight:600;">%s</span>' % name)
+            color = QColor.fromRgb(nm.settings().host_color(self.__current_master_label_name, self._default_color.rgb()))
+            self._new_color(color)
         ts = 'updated: %s' % str(timestamp) if timestamp is not None else ''
         if not nm.settings().autoupdate:
             ts = '%s<span style=" color:orange;"> AU off</span>' % ts
@@ -1978,6 +2029,39 @@ class MainWindow(QMainWindow):
                                   'Set robot image for %s failed!' % str(self.__current_master_label_name),
                                   '%s' % str(e)).exec_()
                 rospy.logwarn("Error while set robot image for %s: %s", str(self.__current_master_label_name), str(e))
+
+    def _set_custom_colors(self):
+        colors = [self._default_color, QColor(87, 93, 94), QColor(60, 116, 96)]
+        # QT4 compatibility hack (expected type by QT4 is QRgb, Qt5 is QColor)
+        if QT_BINDING_VERSION.startswith("4"): 
+            colors = [c.rgb() for c in colors]
+        QColorDialog.setStandardColor(0, colors[0])
+        QColorDialog.setStandardColor(1, colors[1])
+        QColorDialog.setStandardColor(2, colors[2])
+
+    def _new_color(self, color):
+        bg_style = "QWidget#expert_tab { background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 %s, stop: 0.7 %s);}" % (color.name(), self._default_color.name())
+        name_color = QColor(255, 255, 235)
+        self.expert_tab.setStyleSheet("%s" % (bg_style))
+
+    def mastername_mouseDoubleClickEvent(self, event):
+        '''
+        Set the robot color
+        '''
+        if self.currentMaster:
+            try:
+                prev_color = QColor.fromRgb(nm.settings().host_color(self.__current_master_label_name, self._default_color.rgb()))
+                cdiag = QColorDialog(prev_color)
+                cdiag.currentColorChanged.connect(self._new_color)
+                if cdiag.exec_():
+                    nm.settings().set_host_color(self.__current_master_label_name, cdiag.selectedColor().rgb())
+                else:
+                    self._new_color(prev_color)
+            except Exception as e:
+                WarningMessageBox(QMessageBox.Warning, "Error",
+                                  'Set robot color for %s failed!' % str(self.__current_master_label_name),
+                                  '%s' % str(e)).exec_()
+                rospy.logwarn("Error while set robot color for %s: %s", str(self.__current_master_label_name), str(e))
 
     def _on_robot_icon_changed(self, masteruri, path):
         '''
