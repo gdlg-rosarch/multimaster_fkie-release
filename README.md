@@ -1,3 +1,32 @@
+## multimaster_fkie (indigo) - 0.7.0-0
+
+The packages in the `multimaster_fkie` repository were released into the `indigo` distro by running `/usr/bin/bloom-release multimaster_fkie --track indigo --rosdistro indigo` on `Tue, 10 Jan 2017 09:36:43 -0000`
+
+These packages were released:
+- `default_cfg_fkie`
+- `master_discovery_fkie`
+- `master_sync_fkie`
+- `multimaster_fkie`
+- `multimaster_msgs_fkie`
+- `node_manager_fkie`
+
+Version of package(s) in repository `multimaster_fkie`:
+
+- upstream repository: http://github.com/fkie/multimaster_fkie.git
+- release repository: https://github.com/fkie-release/multimaster_fkie-release.git
+- rosdistro version: `0.6.2-0`
+- old version: `0.6.2-0`
+- new version: `0.7.0-0`
+
+Versions of tools used:
+
+- bloom version: `0.5.22`
+- catkin_pkg version: `0.2.4`
+- rosdep version: `0.11.5`
+- rosdistro version: `0.5.0`
+- vcstools version: `0.1.35`
+
+
 ## multimaster_fkie (kinetic) - 0.6.2-0
 
 The packages in the `multimaster_fkie` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release multimaster_fkie --track kinetic --rosdistro kinetic` on `Tue, 15 Nov 2016 06:57:05 -0000`
