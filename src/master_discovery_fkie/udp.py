@@ -30,24 +30,47 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+import Queue
 import array
 import errno
 import fcntl
 import os
 import platform
+import roslib.network
+import rospy
 import socket
 import struct
 import threading
 
-import roslib.network
-import rospy
+SEND_ERRORS = {}
+
+
+class QueueReceiveItem():
+
+    LOOPBACK = 'LOOPBACK'
+    UNICAST = 'UNICAST'
+    MULTICAST = 'MULTICAST'
+
+    def __init__(self, msg, sender_addr, via='LOOPBACK'):
+        self.msg = msg
+        self.sender_addr = sender_addr
+        self.via = via
+
+
+class QueueSendItem():
+
+    def __init__(self, msg, destinations=[]):
+        self.msg = msg
+        self.destinations = destinations
+        if not isinstance(destinations, list):
+            self.destinations = [destinations]
 
 
 class DiscoverSocket(socket.socket):
     '''
     The DiscoverSocket class enables the send and receive UDP messages to a
     multicast group and unicast address. The unicast socket is only created if
-    'unicast_only' parameter is set to True or a specific interface is defined.
+    'send_mcast' and 'listen_mcast' parameter are set to False or a specific interface is defined.
 
     :param port: the port to bind the socket
 
@@ -66,7 +89,7 @@ class DiscoverSocket(socket.socket):
     :type ttl: int (Default: 20)
     '''
 
-    def __init__(self, port, mgroup, ttl=20, unicast_only=False):
+    def __init__(self, port, mgroup, ttl=20, send_mcast=True, listen_mcast=True):
         '''
         Creates a socket, bind it to a given port and join to a given multicast
         group. IPv4 and IPv6 are supported.
@@ -76,15 +99,24 @@ class DiscoverSocket(socket.socket):
         @type mgroup: str
         @param ttl: time to leave
         @type ttl: int (Default: 20)
-        @param unicast_only: send only unicast messages
-        @type unicast_only: bool (Default: False)
+        @param send_mcast: send multicast messages
+        @type send_mcast: bool (Default: True)
+        @param listen_mcast: listen to the multicast group
+        @type listen_mcast: bool (Default: True)
         '''
         self.port = port
+        self.receive_queue = Queue.Queue()
+        self._send_queue = Queue.Queue()
         self._lock = threading.RLock()
-        self.unicast_only = unicast_only
+        self.send_mcast = send_mcast
+        self.listen_mcast = listen_mcast
+        self.unicast_only = not (send_mcast or listen_mcast)
         self._closed = False
         self._msg_callback = None
+        self._locals = [ip for ifname, ip in DiscoverSocket.localifs()]
+        self._locals.append('localhost')
         self.sock_5_error_printed = []
+        self.SOKET_ERRORS_NEEDS_RECONNECT = False
         # get the group and interface. Especially for definition like 226.0.0.0@192.168.101.10
         # it also reads ~interface and ROS_IP
         self.mgroup, self.interface = DiscoverSocket.normalize_mgroup(mgroup, True)
@@ -93,15 +125,15 @@ class DiscoverSocket(socket.socket):
         # of group is the same as for interface
         addrinfo = UcastSocket.getaddrinfo(self.mgroup)
         self.interface_ip = ''
-        if unicast_only:
+        if self.unicast_only:
             # inform about no braodcasting
-            rospy.logwarn("Multicast disabled!")
+            rospy.logwarn("Multicast disabled! This master is only by unicast reachable!")
         if self.interface:
             addrinfo = UcastSocket.getaddrinfo(self.interface, addrinfo[0])
             if addrinfo is not None:
                 self.interface_ip = addrinfo[4][0]
                 self.unicast_socket = UcastSocket(self.interface_ip, port)
-        elif unicast_only:
+        elif self.unicast_only:
             self.unicast_socket = UcastSocket('', port)
 
         rospy.logdebug("mgroup: %s", self.mgroup)
@@ -109,8 +141,8 @@ class DiscoverSocket(socket.socket):
         rospy.logdebug("inet: %s", addrinfo)
 
         socket.socket.__init__(self, addrinfo[0], socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        if not unicast_only:
-            rospy.loginfo("Listen for multicast at ('%s', %d)", self.mgroup, port)
+        if not self.unicast_only:
+            rospy.loginfo("Create multicast socket at ('%s', %d)", self.mgroup, port)
             # initialize multicast socket
             # Allow multiple copies of this program on one machine
             if hasattr(socket, "SO_REUSEPORT"):
@@ -128,28 +160,29 @@ class DiscoverSocket(socket.socket):
                 self.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 1)
 
             try:
-                if addrinfo[0] == socket.AF_INET:  # IPv4
-                    # Create group_bin for de-register later
-                    # Set socket options for multicast specific interface or general
-                    if not self.interface_ip:
-                        self.group_bin = socket.inet_pton(socket.AF_INET, self.mgroup) + struct.pack('=I', socket.INADDR_ANY)
-                        self.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                                        self.group_bin)
-                    else:
-                        self.group_bin = socket.inet_aton(self.mgroup) + socket.inet_aton(self.interface_ip)
-                        self.setsockopt(socket.IPPROTO_IP,
-                                        socket.IP_MULTICAST_IF,
-                                        socket.inet_aton(self.interface_ip))
-                        self.setsockopt(socket.IPPROTO_IP,
-                                        socket.IP_ADD_MEMBERSHIP,
-                                        self.group_bin)
-                else:  # IPv6
-                    # Create group_bin for de-register later
-                    # Set socket options for multicast
-                    self.group_bin = socket.inet_pton(addrinfo[0], self.mgroup) + struct.pack('@I', socket.INADDR_ANY)
-                    self.setsockopt(socket.IPPROTO_IPV6,
-                                    socket.IPV6_JOIN_GROUP,
-                                    self.group_bing)
+                if self.listen_mcast:
+                    if addrinfo[0] == socket.AF_INET:  # IPv4
+                        # Create group_bin for de-register later
+                        # Set socket options for multicast specific interface or general
+                        if not self.interface_ip:
+                            self.group_bin = socket.inet_pton(socket.AF_INET, self.mgroup) + struct.pack('=I', socket.INADDR_ANY)
+                            self.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                                            self.group_bin)
+                        else:
+                            self.group_bin = socket.inet_aton(self.mgroup) + socket.inet_aton(self.interface_ip)
+                            self.setsockopt(socket.IPPROTO_IP,
+                                            socket.IP_MULTICAST_IF,
+                                            socket.inet_aton(self.interface_ip))
+                            self.setsockopt(socket.IPPROTO_IP,
+                                            socket.IP_ADD_MEMBERSHIP,
+                                            self.group_bin)
+                    else:  # IPv6
+                        # Create group_bin for de-register later
+                        # Set socket options for multicast
+                        self.group_bin = socket.inet_pton(addrinfo[0], self.mgroup) + struct.pack('@I', socket.INADDR_ANY)
+                        self.setsockopt(socket.IPPROTO_IPV6,
+                                        socket.IPV6_JOIN_GROUP,
+                                        self.group_bing)
             except socket.error as errobj:
                 msg = str(errobj)
                 if errobj.errno in [errno.ENODEV]:
@@ -168,16 +201,16 @@ class DiscoverSocket(socket.socket):
                 raise
 
         self.addrinfo = addrinfo
-        if not unicast_only:
+        if not self.unicast_only:
             # create a thread to handle the received multicast messages
             self._recv_thread = threading.Thread(target=self.recv_loop_multicast)
-            self._recv_thread.setDaemon(True)
             self._recv_thread.start()
         if self.unicast_socket is not None:
             # create a thread to handle the received unicast messages
             self._recv_thread = threading.Thread(target=self.recv_loop_unicast)
-            self._recv_thread.setDaemon(True)
             self._recv_thread.start()
+        self._send_tread = threading.Thread(target=self._send_loop_from_queue)
+        self._send_tread.start()
 
     def set_message_callback(self, callback):
         '''
@@ -214,65 +247,113 @@ class DiscoverSocket(socket.socket):
         self._closed = True
         # Use the stored group_bin to de-register
         if not self.unicast_only:
-            if self.addrinfo[0] == socket.AF_INET:  # IPv4
-                self.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, self.group_bin)
-            else:  # IPv6
-                self.setsockopt(socket.IPPROTO_IPV6,
-                                socket.IPV6_LEAVE_GROUP,
-                                self.group_bing)
-            rospy.loginfo("Stop receiving multicast at ('%s', %s)", self.mgroup, self.port)
+            if self.listen_mcast:
+                if self.addrinfo[0] == socket.AF_INET:  # IPv4
+                    self.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, self.group_bin)
+                else:  # IPv6
+                    self.setsockopt(socket.IPPROTO_IPV6,
+                                    socket.IPV6_LEAVE_GROUP,
+                                    self.group_bing)
+            rospy.loginfo("Close multicast socket at ('%s', %s)", self.mgroup, self.port)
+            self.sendto('', ('localhost', self.port))
             socket.socket.close(self)
         # close the unicast socket
         if self.unicast_socket is not None:
             self.unicast_socket.close()
 
-    def send2group(self, msg):
-        '''
-        Sends the given message to the joined multicast group. Some errors on send
-        will be ignored (``ENETRESET``, ``ENETDOWN``, ``ENETUNREACH``)
-
-        :param msg: message to send
-
-        :type msg: str
-        '''
+    def send_queued(self, msg, destinations=[]):
         try:
-            if self.unicast_only and self.unicast_socket:
-                self.unicast_socket.send2addr(msg, self.unicast_socket.interface)
-            else:
-                # Send to the multicast group address as supplied
-                # Default '226.0.0.0'
-                self.sendto(msg, (self.mgroup, self.getsockname()[1]))
-        except socket.error as errobj:
-            msg = str(errobj)
-            if errobj.errno not in [errno.ENETDOWN, errno.ENETUNREACH, errno.ENETRESET]:
-                raise
+            self._send_queue.put(QueueSendItem(msg, destinations), timeout=1)
+        except Queue.Full as full:
+            import traceback
+            print traceback.format_exc()
+            rospy.logwarn("Can't send message: %s" % full)
+        except Exception as e:
+            rospy.logwarn("Error while put message into queue: %s" % e)
 
-    def send2addr(self, msg, addr):
+    def _get_next_queue_item(self):
         '''
-        Sends the given message to the joined multicast group. Some errors on send
-        will be ignored (``ENETRESET``, ``ENETDOWN``, ``ENETUNREACH``)
-
-        :param msg: message to send
-
-        :type msg: str
-
-        :param addr: IPv4 or IPv6 address
-
-        :type addr: str
+        Wait for next available QueueSendItem. This method cancel waiting on exit and return None.
         '''
-        try:
-            if self.unicast_socket is None:
-                self.sendto(msg, (addr, self.getsockname()[1]))
-            else:
-                self.unicast_socket.send2addr(msg, addr)
-        except socket.error as errobj:
-            msg = str(errobj)
-            if errobj.errno in [-5]:
-                if addr not in self.sock_5_error_printed:
-                    rospy.logwarn("socket.error[%d]: %s, addr: %s", errobj.errno, msg, addr)
-                    self.sock_5_error_printed.append(addr)
-            elif errobj.errno not in [100, 101, 102]:
-                raise
+        while not self._closed:
+            try:
+                send_item = self._send_queue.get(timeout=1)
+                return send_item
+            except Queue.Empty:
+                pass
+            except Exception as e:
+                rospy.logwarn("Error while get send item from queue: %s" % e)
+        return None
+
+    def _send_loop_from_queue(self):
+        while not self._closed:
+            send_item = self._get_next_queue_item()
+            if send_item is not None:
+                msg = send_item.msg
+                if send_item.destinations:
+                    # send to given addresses
+                    for addr in send_item.destinations:
+                        try:
+                            if addr in self._locals:
+                                self.receive_queue.put(QueueReceiveItem(msg, (addr, self.port), QueueReceiveItem.LOOPBACK), timeout=1)
+                            elif self.unicast_socket is None:
+                                self.sendto(msg, (addr, self.getsockname()[1]))
+                            else:
+                                self.unicast_socket.send2addr(msg, addr)
+                            try:
+                                del SEND_ERRORS[addr]
+                            except:
+                                pass
+                        except socket.error as errobj:
+                            erro_msg = "Error while send to '%s': %s" % (addr, errobj)
+                            SEND_ERRORS[addr] = erro_msg
+                            # -2: Name or service not known
+                            if errobj.errno in [-5, -2]:
+                                if addr not in self.sock_5_error_printed:
+                                    rospy.logwarn(erro_msg)
+                                    self.sock_5_error_printed.append(addr)
+                            else:
+                                rospy.logwarn(erro_msg)
+                            if errobj.errno in [errno.ENETDOWN, errno.ENETUNREACH, errno.ENETRESET, errno]:
+                                self.SOKET_ERRORS_NEEDS_RECONNECT = True
+                        except Exception as e:
+                            erro_msg = "Send to robot host '%s' failed: %s" % (addr, e)
+                            rospy.logwarn(erro_msg)
+                            SEND_ERRORS[addr] = erro_msg
+                else:
+                    # send a multicast message
+                    # simulate the reception of a message from local host
+                    addr = self.mgroup
+                    try:
+                        if not self.listen_mcast:
+                            self.receive_queue.put(QueueReceiveItem(msg, ('localhost', self.port), QueueReceiveItem.LOOPBACK), timeout=1)
+                        if self.unicast_only and self.unicast_socket:
+                            addr = self.unicast_socket.interface
+                            self.unicast_socket.send2addr(msg, self.unicast_socket.interface)
+                        elif self.send_mcast:
+                            # Send to the multicast group address as supplied
+                            # Default '226.0.0.0'
+                            self.sendto(msg, (self.mgroup, self.getsockname()[1]))
+                        try:
+                            del SEND_ERRORS[addr]
+                        except:
+                            pass
+                    except socket.error as errobj:
+                        erro_msg = "Error while send to '%s': %s" % (addr, errobj)
+                        SEND_ERRORS[addr] = erro_msg
+                        # -2: Name or service not known
+                        if errobj.errno in [-5, -2]:
+                            if addr not in self.sock_5_error_printed:
+                                rospy.logwarn(erro_msg)
+                                self.sock_5_error_printed.append(addr)
+                        else:
+                            rospy.logdebug(erro_msg)
+                        if errobj.errno in [errno.ENETDOWN, errno.ENETUNREACH, errno.ENETRESET]:
+                            self.SOKET_ERRORS_NEEDS_RECONNECT = True
+                    except Exception as e:
+                        erro_msg = "Send to robot host '%s' failed: %s" % (addr, e)
+                        rospy.logwarn(erro_msg)
+                        SEND_ERRORS[addr] = erro_msg
 
     def hasEnabledMulticastIface(self):
         '''
@@ -339,11 +420,12 @@ class DiscoverSocket(socket.socket):
         while not rospy.is_shutdown() and not self._closed:
             try:
                 (msg, address) = self.recvfrom(1024)
-                with self._lock:
-                    if self._msg_callback is not None and not rospy.is_shutdown() and not self._closed:
-                        self._msg_callback(msg, address, True)
+                if not self._closed:
+                    self.receive_queue.put(QueueReceiveItem(msg, address, QueueReceiveItem.MULTICAST), timeout=1)
             except socket.timeout:
                 pass
+            except Queue.Full as full_error:
+                rospy.logwarn("Error while process recevied multicast message: %s", full_error)
             except socket.error:
                 import traceback
                 rospy.logwarn("socket error: %s", traceback.format_exc())
@@ -356,11 +438,12 @@ class DiscoverSocket(socket.socket):
             while not rospy.is_shutdown() and not self._closed:
                 try:
                     (msg, address) = self.unicast_socket.recvfrom(1024)
-                    with self._lock:
-                        if self._msg_callback is not None and not rospy.is_shutdown() and not self._closed:
-                            self._msg_callback(msg, address, False)
+                    if not self._closed:
+                        self.receive_queue.put(QueueReceiveItem(msg, address, QueueReceiveItem.UNICAST), timeout=1)
                 except socket.timeout:
                     pass
+                except Queue.Full as full_error:
+                    rospy.logwarn("Error while process recevied unicast message: %s", full_error)
                 except socket.error:
                     import traceback
                     rospy.logwarn("unicast socket error: %s", traceback.format_exc())
@@ -378,6 +461,7 @@ class UcastSocket(socket.socket):
         @type port: int
         '''
         self.interface = interface
+        self.port = port
         addrinfo = None
         # If interface isn't specified, try to find an non localhost interface to
         # get some info for binding. Otherwise use localhost
@@ -434,12 +518,13 @@ class UcastSocket(socket.socket):
                     rospy.logwarn("socket.error[%d]: %s, addr: %s", errobj.errno, msg, addr)
                     self.sock_5_error_printed.append(addr)
             elif errobj.errno in [errno.EINVAL, -2]:
-                raise Exception('Cannot send to `%s`, try to change the interface, message: %s' % (addr, msg))
+                raise  # Exception('Cannot send to `%s`, try to change the interface, message: %s' % (addr, msg))
             elif errobj.errno not in [errno.ENETDOWN, errno.ENETUNREACH, errno.ENETRESET]:
                 raise
 
     def close(self):
         """ Cleanup and close the socket"""
+        self.sendto('', (self.interface, self.port))
         socket.socket.close(self)
 
     @staticmethod
