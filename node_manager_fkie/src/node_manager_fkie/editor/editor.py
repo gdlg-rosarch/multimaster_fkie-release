@@ -289,7 +289,8 @@ class Editor(QMainWindow):
                 editor.document().modificationChanged.connect(self.on_editor_modificationChanged)
                 editor.cursorPositionChanged.connect(self.on_editor_positionChanged)
                 editor.setFocus(Qt.OtherFocusReason)
-                editor.textChanged.connect(self.on_text_changed)
+#                editor.textChanged.connect(self.on_text_changed)
+                editor.undoAvailable.connect(self.on_text_changed)
                 self.tabWidget.setCurrentIndex(tab_index)
 #                self.find_dialog.set_search_path(filename)
             else:
@@ -311,7 +312,7 @@ class Editor(QMainWindow):
             self._search_thread.search_result_signal.connect(self.on_search_result_on_open)
             self._search_thread.start()
 
-    def on_text_changed(self):
+    def on_text_changed(self, value=""):
         if self.tabWidget.currentWidget().hasFocus():
             self.find_dialog.file_changed(self.tabWidget.currentWidget().filename)
 
@@ -397,7 +398,7 @@ class Editor(QMainWindow):
         Shows the number of the line and column in a label.
         '''
         cursor = self.tabWidget.currentWidget().textCursor()
-        self.pos_label.setText(':%s:%s' % (cursor.blockNumber() + 1, cursor.columnNumber()))
+        self.pos_label.setText(':%s:%s #%s' % (cursor.blockNumber() + 1, cursor.columnNumber(), cursor.position()))
 
     def __getTabName(self, lfile):
         base = os.path.basename(lfile).replace('.launch', '')
