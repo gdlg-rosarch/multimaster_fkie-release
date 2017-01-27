@@ -687,10 +687,10 @@ class MasterList(object):
         try:
             self.__lock.acquire()
             while self.__pollings:
-                name, p = self.__pollings.popitem()
+                _name, p = self.__pollings.popitem()
                 p.stop()
             while self.__masters:
-                name, master = self.__masters.popitem()
+                _name, master = self.__masters.popitem()
                 self.pubchanges.publish(MasterState(MasterState.STATE_REMOVED,
                                                     ROSMaster(str(master.name),
                                                               master.getMasterUri(),
@@ -712,7 +712,7 @@ class MasterList(object):
         masters = list()
         self.__lock.acquire(True)
         try:
-            for key, master in self.__masters.iteritems():
+            for _key, master in self.__masters.iteritems():
                 masters.append(ROSMaster(str(master.name),
                                          master.getMasterUri(),
                                          master.getRosTimestamp(),
