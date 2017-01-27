@@ -45,7 +45,7 @@ import time
 import uuid
 import xmlrpclib
 
-from master_discovery_fkie.common import resolve_url
+from master_discovery_fkie.common import get_hostname, resolve_url, subdomain
 
 import node_manager_fkie as nm
 
@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
         self._changed_binaries = dict()
         self._changed_files_param = dict()
         self._syncs_to_start = []  # hostnames
+        self._accept_next_update = False
         # self.setAttribute(Qt.WA_AlwaysShowToolTips, True)
         # setup main window frame
         self.setObjectName('MainWindow')
@@ -333,6 +334,7 @@ class MainWindow(QMainWindow):
         self._subscribe()
         if DIAGNOSTICS_AVAILABLE:
             self._sub_extended_log = rospy.Subscriber('/diagnostics_agg', DiagnosticArray, self._callback_diagnostics)
+        self.launch_dock.launchlist_model.reloadPackages()
 
     def _dock_widget_in(self, area=Qt.LeftDockWidgetArea, only_visible=False):
         result = []
@@ -496,7 +498,7 @@ class MainWindow(QMainWindow):
             masteruri = masteruri_from_ros()
             master = xmlrpclib.ServerProxy(masteruri)
             _, _, self.materuri = master.getUri(rospy.get_name())  # _:=code, message
-            nm.is_local(nm.nameres().getHostname(self.materuri))
+            nm.is_local(get_hostname(self.materuri))
         return self.materuri
 
     def removeMaster(self, masteruri):
@@ -574,7 +576,7 @@ class MainWindow(QMainWindow):
 
     def on_host_update_request(self, host):
         for key, value in self.masters.items():
-            if nm.nameres().getHostname(key) == host and value.master_state is not None:
+            if get_hostname(key) == host and value.master_state is not None:
                 self._update_handler.requestMasterInfo(value.master_state.uri, value.master_state.monitoruri)
 
     def on_host_description_updated(self, masteruri, host, descr):
@@ -628,7 +630,7 @@ class MainWindow(QMainWindow):
             # remove discovered ROS master and set the local master to selected
             for uri in self.masters.keys():
                 master = self.masters[uri]
-                if nm.is_local(nm.nameres().getHostname(uri)) or uri == self.getMasteruri():
+                if nm.is_local(get_hostname(uri)) or uri == self.getMasteruri():
                     if not self._history_selected_robot or master.mastername == self._history_selected_robot:
                         self.setCurrentMaster(master)
                 else:
@@ -704,14 +706,14 @@ class MainWindow(QMainWindow):
         for uri in self.masters.keys():
             if uri not in new_uris:
                 master = self.masters[uri]
-                if not (nm.is_local(nm.nameres().getHostname(uri)) or uri == self.getMasteruri()):
+                if not (nm.is_local(get_hostname(uri)) or uri == self.getMasteruri()):
                     if master.master_state is not None:
                         self.master_model.removeMaster(master.master_state.name)
                     self.removeMaster(uri)
         # add or update master
         for m in master_list:
             if m.uri is not None:
-                host = nm.nameres().getHostname(m.uri)
+                host = get_hostname(m.uri)
                 nm.nameres().add_master_entry(m.uri, m.name, host)
                 m.name = nm.nameres().mastername(m.uri)
                 master = self.getMaster(m.uri)
@@ -733,7 +735,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_on_finish"):
             rospy.logdebug("ignore changes on %s, because currently on closing...", msg.master.uri)
             return
-        host = nm.nameres().getHostname(msg.master.uri)
+        host = get_hostname(msg.master.uri)
         if msg.state == MasterState.STATE_CHANGED:
             nm.nameres().add_master_entry(msg.master.uri, msg.master.name, host)
             msg.master.name = nm.nameres().mastername(msg.master.uri)
@@ -745,7 +747,7 @@ class MainWindow(QMainWindow):
             else:
                 rospy.loginfo("Autoupdate disabled, the data will not be updated for %s" % msg.master.uri)
             if not msg.master.online:
-                host = nm.nameres().getHostname(msg.master.uri)
+                host = get_hostname(msg.master.uri)
                 rospy.loginfo("remove SSH connection for '%s' because the master is now offline" % host)
                 nm.ssh().remove(host)
         if msg.state == MasterState.STATE_NEW:
@@ -835,7 +837,7 @@ class MainWindow(QMainWindow):
                         if self._history_selected_robot == minfo.mastername and self._history_selected_robot == master.mastername and self.currentMaster != master:
                             if self.currentMaster is not None and not self.currentMaster.is_local:
                                 self.setCurrentMaster(master)
-                        elif nm.is_local(nm.nameres().getHostname(master.master_info.masteruri)) or self.restricted_to_one_master:
+                        elif nm.is_local(get_hostname(master.master_info.masteruri)) or self.restricted_to_one_master:
                             if new_info:
                                 has_discovery_service = self.hasDiscoveryService(minfo)
                                 if (not self.own_master_monitor.isPaused() or not self.masterTableView.isEnabled()) and has_discovery_service:
@@ -963,7 +965,7 @@ class MainWindow(QMainWindow):
             time_dialog = QDialog()
             ui_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'TimeInput.ui')
             loadUi(ui_file, time_dialog)
-            host = nm.nameres().getHostname(self.currentMaster.master_state.uri)
+            host = get_hostname(self.currentMaster.master_state.uri)
             time_dialog.setWindowTitle('Set time on %s' % host)
             time_dialog.hostsComboBox.addItems(nm.history().cachedParamValues('/ntp'))
             if self.currentMaster.is_local:
@@ -1027,7 +1029,7 @@ class MainWindow(QMainWindow):
         '''
         from run_dialog import RunDialog
         if self.currentMaster is not None:
-            dia = RunDialog(nm.nameres().getHostname(self.currentMaster.masteruri), self.currentMaster.masteruri)
+            dia = RunDialog(get_hostname(self.currentMaster.masteruri), self.currentMaster.masteruri)
             if dia.exec_():
                 params = dia.run_params()
                 if params:
@@ -1085,12 +1087,12 @@ class MainWindow(QMainWindow):
                     args.append("-o %s/record" % nm.settings().LOG_PATH)
                     suffix = "_%d" % int(time.time())
                 node_name = '%s%s_%s%s' % (prefix, name.lower().replace(' ', '_'),
-                                           self.currentMaster.master_state.name.replace('-', '_'), suffix)
+                                           self.currentMaster.master_state.name, suffix)
                 self.currentMaster._progress_queue.add2queue(str(uuid.uuid4()),
                                                              'start %s' % name,
                                                              nm.starter().runNodeWithoutConfig,
                                                              ('localhost', package, binary,
-                                                              node_name, args,
+                                                              nm.nameres().normalize_name(node_name), args,
                                                               '%s' % self.currentMaster.master_state.uri,
                                                               False))
             except (Exception, nm.StartException), e:
@@ -1114,7 +1116,7 @@ class MainWindow(QMainWindow):
             self._sync_dialog.resize(350, 190)
             if self._sync_dialog.exec_():
                 try:
-                    host = nm.nameres().getHostname(master.masteruri)
+                    host = get_hostname(master.masteruri)
                     if self._sync_dialog.interface_filename is not None:
                         # copy the interface file to remote machine
                         self._progress_queue_sync.add2queue(str(uuid.uuid4()),
@@ -1172,7 +1174,7 @@ class MainWindow(QMainWindow):
                                      '_ignore_services:=[]', '_sync_services:=[]',
                                      '_sync_remote_nodes:=False']
                 try:
-                    host = nm.nameres().getHostname(master.masteruri)
+                    host = get_hostname(master.masteruri)
                     self._progress_queue_sync.add2queue(str(uuid.uuid4()),
                                                         'start sync on ' + str(host),
                                                         nm.starter().runNodeWithoutConfig,
@@ -1198,7 +1200,7 @@ class MainWindow(QMainWindow):
             return
         # update the info panel of the robot. If the node manager is not selected the updates are rarer.
         current_time = time.time()
-        if self.isActiveWindow() or current_time - self._last_time_view_update > 5:
+        if self.isActiveWindow() or current_time - self._last_time_view_update > 15:
             self._last_time_view_update = current_time
             if self.currentMaster is not None and self.currentMaster.master_state is not None:
                 master = self.getMaster(self.currentMaster.master_state.uri)
@@ -1239,7 +1241,8 @@ class MainWindow(QMainWindow):
             pass
         if self.__current_master_label_name != name:
             self.__current_master_label_name = name
-            self.masternameLabel.setText('<span style=" font-size:14pt; font-weight:600;">%s</span>' % name)
+            show_name = name if nm.settings().show_domain_suffix else subdomain(name)
+            self.masternameLabel.setText('<span style=" font-size:14pt; font-weight:600;">%s</span>' % show_name)
             color = QColor.fromRgb(nm.settings().host_color(self.__current_master_label_name, self._default_color.rgb()))
             self._new_color(color)
         ts = 'updated: %s' % str(timestamp) if timestamp is not None else ''
@@ -1673,7 +1676,7 @@ class MainWindow(QMainWindow):
             host = 'localhost'
             username = nm.settings().default_user
             if self.currentMaster is not None:
-                host = nm.nameres().getHostname(self.currentMaster.masteruri)
+                host = get_hostname(self.currentMaster.masteruri)
                 username = self.currentMaster.current_user
             params = {'Host': ('string', host),
                       'recursive': ('bool', 'False'),
@@ -1852,7 +1855,7 @@ class MainWindow(QMainWindow):
             for (muri, lfile) in new_affected:
                 self.__in_question.remove((muri, lfile))
             for c in cfgs:
-                host = '%s' % nm.nameres().getHostname(choices[c][0].masteruri)
+                host = '%s' % get_hostname(choices[c][0].masteruri)
                 username = choices[c][0].current_user
                 self.launch_dock.progress_queue.add2queue(str(uuid.uuid4()),
                                                           'transfer files to %s' % host,
@@ -1903,14 +1906,14 @@ class MainWindow(QMainWindow):
 
     def on_description_anchorClicked(self, url):
         self._accept_next_update = True
-        if url.toString().startswith('open_sync_dialog://'):
-            self.on_sync_dialog_released(False, self._url_path(url).replace('open_sync_dialog', 'http'), True)
-        elif url.toString().startswith('show_all_screens://'):
-            master = self.getMaster(self._url_path(url).replace('show_all_screens', 'http'), False)
+        if url.toString().startswith('open-sync-dialog://'):
+            self.on_sync_dialog_released(False, self._url_path(url).replace('open-sync-dialog', 'http'), True)
+        elif url.toString().startswith('show-all-screens://'):
+            master = self.getMaster(self._url_path(url).replace('show-all-screens', 'http'), False)
             if master is not None:
                 master.on_show_all_screens()
-        elif url.toString().startswith('remove_all_launch_server://'):
-            master = self.getMaster(self._url_path(url).replace('remove_all_launch_server', 'http'), False)
+        elif url.toString().startswith('remove-all-launch-server://'):
+            master = self.getMaster(self._url_path(url).replace('remove-all-launch-server', 'http'), False)
             if master is not None:
                 master.on_remove_all_launch_server()
         elif url.toString().startswith('node://'):
@@ -1943,38 +1946,39 @@ class MainWindow(QMainWindow):
         elif url.toString().startswith('servicecall://'):
             if self.currentMaster is not None:
                 self.currentMaster.service_call(self._url_path(url))
-        elif url.toString().startswith('unregister_node://'):
+        elif url.toString().startswith('unregister-node://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_unregister_nodes()
-        elif url.toString().startswith('start_node://'):
+        elif url.toString().startswith('start-node://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_start_clicked()
-        elif url.toString().startswith('restart_node://'):
+        elif url.toString().startswith('restart-node://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_force_start_nodes()
-        elif url.toString().startswith('start_node_at_host://'):
+        elif url.toString().startswith('start-node-at-host://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_start_nodes_at_host()
-        elif url.toString().startswith('start_node_adv://'):
+        elif url.toString().startswith('start-node-adv://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_start_alt_clicked()
-        elif url.toString().startswith('kill_node://'):
+        elif url.toString().startswith('kill-node://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_kill_nodes()
-        elif url.toString().startswith('kill_screen://'):
+        elif url.toString().startswith('kill-screen://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_kill_screens()
-        elif url.toString().startswith('copy_log_path://'):
+        elif url.toString().startswith('copy-log-path://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_log_path_copy()
         elif url.toString().startswith('launch://'):
             self.on_launch_edit([self._url_path(url)], '')
-        elif url.toString().startswith('reload_globals://'):
-            self._reload_globals_at_next_start(self._url_path(url).replace('reload_globals://', ''))
+        elif url.toString().startswith('reload-globals://'):
+            self._reload_globals_at_next_start(self._url_path(url).replace('reload-globals://', ''))
         elif url.toString().startswith('poweroff://'):
             self.poweroff_host(self._url_host(url))
         else:
             QDesktopServices.openUrl(url)
+            self._accept_next_update = False
 
     def _url_path(self, url):
         '''Helper class for Qt5 compatibility'''
@@ -2033,7 +2037,7 @@ class MainWindow(QMainWindow):
     def _set_custom_colors(self):
         colors = [self._default_color, QColor(87, 93, 94), QColor(60, 116, 96)]
         # QT4 compatibility hack (expected type by QT4 is QRgb, Qt5 is QColor)
-        if QT_BINDING_VERSION.startswith("4"): 
+        if QT_BINDING_VERSION.startswith("4"):
             colors = [c.rgb() for c in colors]
         QColorDialog.setStandardColor(0, colors[0])
         QColorDialog.setStandardColor(1, colors[1])
@@ -2041,7 +2045,6 @@ class MainWindow(QMainWindow):
 
     def _new_color(self, color):
         bg_style = "QWidget#expert_tab { background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 %s, stop: 0.7 %s);}" % (color.name(), self._default_color.name())
-        name_color = QColor(255, 255, 235)
         self.expert_tab.setStyleSheet("%s" % (bg_style))
 
     def mastername_mouseDoubleClickEvent(self, event):
