@@ -41,7 +41,7 @@ import threading
 from .detailed_msg_box import WarningMessageBox
 
 
-class SupervisedPopen(QObject, subprocess.Popen):
+class SupervisedPopen(QObject):
     '''
     The class overrides the subprocess.Popen and waits in a thread for its finish.
     If an error is printed out, it will be shown in a message dialog.
@@ -67,21 +67,15 @@ class SupervisedPopen(QObject, subprocess.Popen):
         :type description: str
         '''
         try:
-            try:
-                super(SupervisedPopen, self).__init__(args=args, bufsize=bufsize, executable=executable, stdin=stdin, stdout=stdout,
-                                                      stderr=stderr, preexec_fn=preexec_fn, close_fds=close_fds,
-                                                      shell=shell, cwd=cwd, env=env, universal_newlines=universal_newlines,
-                                                      startupinfo=startupinfo, creationflags=creationflags)
-            except:
-                subprocess.Popen.__init__(self, args, bufsize, executable, stdin, stdout,
-                                          stderr, preexec_fn, close_fds, shell, cwd, env,
-                                          universal_newlines, startupinfo, creationflags)
-                QObject.__init__(self)
+            QObject.__init__(self)
             self._args = args
             self._object_id = object_id
             self._description = description
             self.error.connect(self.on_error)
             # wait for process to avoid 'defunct' processes
+            self.popen = subprocess.Popen(args=args, bufsize=bufsize, executable=executable, stdin=stdin, stdout=stdout,
+                                          stderr=stderr, preexec_fn=preexec_fn, close_fds=close_fds, shell=shell, cwd=cwd, env=env,
+                                          universal_newlines=universal_newlines, startupinfo=startupinfo, creationflags=creationflags)
             thread = threading.Thread(target=self._supervise)
             thread.setDaemon(True)
             thread.start()
@@ -91,11 +85,23 @@ class SupervisedPopen(QObject, subprocess.Popen):
 #   def __del__(self):
 #     print "Deleted:", self._description
 
+    @property
+    def stdout(self):
+        return self.popen.stdout
+
+    @property
+    def stderr(self):
+        return self.popen.stderr
+
+    @property
+    def stdin(self):
+        return self.popen.stdin
+
     def _supervise(self):
         '''
         Wait for process to avoid 'defunct' processes
         '''
-        self.wait()
+        self.popen.wait()
         result_err = ''
         if self.stderr is not None:
             result_err = self.stderr.read()
@@ -104,6 +110,5 @@ class SupervisedPopen(QObject, subprocess.Popen):
         self.finished.emit(self._object_id)
 
     def on_error(self, object_id, descr, msg):
-        print "ON ERROR"
         WarningMessageBox(QMessageBox.Warning, object_id, '%s\n\n'
                           '%s' % (descr, msg), ' '.join(self._args)).exec_()

@@ -33,13 +33,69 @@
 import os
 import re
 import xmlrpclib
+from urlparse import urlparse
 
 import roslib.names
 import rospy
 
 
 EMPTY_PATTERN = re.compile('\b', re.I)
+IP4_PATTERN = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
 MASTERURI = None
+
+
+def get_hostname(url):
+    '''
+    Extracts the hostname from given url.
+
+    :param url: the url to parse
+
+    :type url:  str
+
+    :return: the hostname or `None`, if the url is `None` or `invalid`
+
+    :rtype: str
+
+    :see: http://docs.python.org/library/urlparse.html
+    '''
+    if url is None:
+        return None
+    o = urlparse(url)
+    hostname = o.hostname
+    if hostname is None:
+        hostname = url
+    return hostname
+
+
+def get_port(url):
+    '''
+    Extracts the port from given url.
+
+    :param url: the url to parse
+
+    :type url:  str
+
+    :return: the port or `None`, if the url is `None` or `invalid`
+
+    :rtype: int
+
+    :see: http://docs.python.org/library/urlparse.html
+    '''
+    if url is None:
+        return None
+    o = urlparse(url)
+    return o.port
+
+
+def subdomain(hostname):
+    '''
+    :return: the name with first subdomain
+    '''
+    if hostname is None:
+        return None
+    if IP4_PATTERN.match(hostname):
+        return hostname
+    return hostname.split('.')[0]
 
 
 def masteruri_from_ros():
