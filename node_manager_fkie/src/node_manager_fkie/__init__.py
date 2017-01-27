@@ -39,6 +39,7 @@ import socket
 import sys
 import threading
 
+from master_discovery_fkie.common import get_hostname
 from node_manager_fkie.common import get_ros_home, masteruri_from_ros
 from node_manager_fkie.file_watcher import FileWatcher
 from node_manager_fkie.history import History
@@ -57,8 +58,8 @@ PKG_NAME = 'node_manager_fkie'
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.7.0"  # git describe --tags --dirty --always
-__date__ = "2017-01-09"  # git log -1 --date=iso
+__version__ = "0.7.2"  # git describe --tags --dirty --always
+__date__ = "2017-01-27"  # git log -1 --date=iso
 
 # PYTHONVER = (2, 7, 1)
 # if sys.version_info < PYTHONVER:
@@ -181,7 +182,6 @@ def is_local(hostname, wait=False):
             if isinstance(HOSTS_CACHE[hostname], threading.Thread):
                 return False
             return HOSTS_CACHE[hostname]
-
     try:
         socket.inet_aton(hostname)
         local_addresses = ['localhost'] + roslib.network.get_local_addresses()
@@ -296,7 +296,7 @@ def init_globals(masteruri):
 
     # test where the roscore is running (local or remote)
     __is_local('localhost')  # fill cache
-    return __is_local(_NAME_RESOLUTION.getHostname(masteruri))  # fill cache
+    return __is_local(get_hostname(masteruri))  # fill cache
 
 
 def init_arg_parser():
