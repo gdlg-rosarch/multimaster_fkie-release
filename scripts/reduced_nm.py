@@ -40,6 +40,8 @@ import xmlrpclib
 from roslib.network import get_local_addresses
 import rospy
 
+from master_discovery_fkie.common import get_hostname, get_port
+
 
 class StartException(Exception):
     pass
@@ -84,20 +86,6 @@ def masteruri_from_ros():
         return os.environ['ROS_MASTER_URI']
 
 
-def getHostname(url):
-    '''
-    Returns the host name used in a url
-
-    @return: host or None if url is invalid
-    @rtype:  C{str}
-    '''
-    if url is None:
-        return None
-    from urlparse import urlparse
-    o = urlparse(url)
-    return o.hostname
-
-
 def get_ros_hostname(url):
     '''
     Returns the host name used in a url, if it is a name. If it is an IP an
@@ -106,7 +94,7 @@ def get_ros_hostname(url):
     @return: host or '' if url is an IP or invalid
     @rtype:  C{str}
     '''
-    hostname = getHostname(url)
+    hostname = get_hostname(url)
     if hostname is not None:
         if hostname != 'localhost':
             if '.' not in hostname and ':' not in hostname:
@@ -295,11 +283,10 @@ class StartHandler(object):
             master.getUri(rospy.get_name())
         except:
             # run a roscore
-            from urlparse import urlparse
-            master_host = urlparse(masteruri).hostname
+            master_host = get_hostname(masteruri)
             if cls.is_local(master_host, True):
                 print "Start ROS-Master with", masteruri, "..."
-                master_port = urlparse(masteruri).port
+                master_port = get_port(masteruri)
                 new_env = dict(os.environ)
                 new_env['ROS_MASTER_URI'] = masteruri
                 ros_hostname = get_ros_hostname(masteruri)

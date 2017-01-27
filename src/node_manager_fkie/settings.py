@@ -123,6 +123,8 @@ class Settings(object):
     HIGHLIGHT_XML_BLOCKS = True
     COLORIZE_HOSTS = True
 
+    SHOW_DOMAIN_SUFFIX = False
+
     TRANSPOSE_PUB_SUB_DESCR = True
 
     DEAFULT_HOST_COLORS = [QColor(255, 255, 235).rgb()]
@@ -182,6 +184,7 @@ class Settings(object):
         self._confirm_exit_when_closing = self.str2bool(settings.value('confirm_exit_when_closing', self.CONFIRM_EXIT_WHEN_CLOSING))
         self._highlight_xml_blocks = self.str2bool(settings.value('highlight_xml_blocks', self.HIGHLIGHT_XML_BLOCKS))
         self._colorize_hosts = self.str2bool(settings.value('colorize_hosts', self.COLORIZE_HOSTS))
+        self._show_domain_suffix = self.str2bool(settings.value('show_domain_suffix', self.SHOW_DOMAIN_SUFFIX))
         self._transpose_pub_sub_descr = self.str2bool(settings.value('transpose_pub_sub_descr', self.TRANSPOSE_PUB_SUB_DESCR))
         settings.beginGroup('host_colors')
         self._host_colors = dict()
@@ -414,6 +417,18 @@ class Settings(object):
             settings.setValue('colorize_hosts', self._colorize_hosts)
 
     @property
+    def show_domain_suffix(self):
+        return self._show_domain_suffix
+
+    @show_domain_suffix.setter
+    def show_domain_suffix(self, value):
+        val = self.str2bool(value)
+        if self._show_domain_suffix != val:
+            self._show_domain_suffix = val
+            settings = self.qsettings(self.CFG_FILE)
+            settings.setValue('show_domain_suffix', self._show_domain_suffix)
+
+    @property
     def transpose_pub_sub_descr(self):
         return self._transpose_pub_sub_descr
 
@@ -476,7 +491,7 @@ class Settings(object):
         noclose_str = '-hold'
         if self._terminal_emulator is None:
             self._terminal_emulator = ""
-            for t in ['/usr/bin/x-terminal-emulator', '/usr/bin/xterm']:
+            for t in ['/usr/bin/x-terminal-emulator', '/usr/bin/xterm', '/opt/x11/bin/xterm']:
                 if os.path.isfile(t) and os.access(t, os.X_OK):
                     # workaround to support the command parameter in different terminal
                     if os.path.basename(os.path.realpath(t)) in ['terminator', 'gnome-terminal', 'xfce4-terminal']:
@@ -494,7 +509,7 @@ class Settings(object):
                     self._terminal_emulator = t
                     break
         if self._terminal_emulator == "":
-            return ""
+            raise Exception("No Terminal found! Please install one of ['/usr/bin/x-terminal-emulator', '/usr/bin/xterm', '/opt/x11/bin/xterm']")
         noclose_str = noclose_str if noclose else ""
         return '%s -T "%s" %s -%s %s' % (self._terminal_emulator, title, noclose_str, self._terminal_command_arg, ' '.join(cmd))
 
