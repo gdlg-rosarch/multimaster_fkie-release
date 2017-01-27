@@ -40,6 +40,7 @@ import time
 import types
 import xmlrpclib
 
+from master_discovery_fkie.common import get_hostname, get_port
 from node_manager_fkie.common import get_ros_home, masteruri_from_ros, package_name
 from node_manager_fkie.name_resolution import NameResolution
 from node_manager_fkie.supervised_popen import SupervisedPopen
@@ -591,10 +592,9 @@ class StartHandler(object):
 #        raise
         except:
             # run a roscore
-            from urlparse import urlparse
-            master_host = urlparse(masteruri).hostname
+            master_host = get_hostname(masteruri)
             if nm.is_local(master_host, True):
-                master_port = urlparse(masteruri).port
+                master_port = get_port(masteruri)
                 new_env = dict(os.environ)
                 new_env['ROS_MASTER_URI'] = masteruri
                 ros_hostname = NameResolution.get_ros_hostname(masteruri)
@@ -616,9 +616,7 @@ class StartHandler(object):
                     if count >= 11:
                         raise StartException('Cannot connect to the ROS-Master: ' + str(masteruri))
                 except Exception as e:
-                    import sys
-                    print >> sys.stderr, e
-                    raise
+                    raise Exception("Error while call '%s': %s" % (cmd_args, e))
             else:
                 raise Exception("ROS master '%s' is not reachable" % masteruri)
         finally:
