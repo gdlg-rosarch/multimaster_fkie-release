@@ -30,8 +30,6 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from hgext.convert.convcmd import recode
-from urlparse import urlparse
 import Queue
 import errno
 import roslib.network
@@ -42,8 +40,10 @@ import struct
 import sys
 import threading
 import time
+import traceback
 import xmlrpclib
 
+from .common import get_hostname
 from .master_monitor import MasterMonitor, MasterConnectionException
 from .udp import DiscoverSocket, QueueReceiveItem, SEND_ERRORS
 
@@ -135,6 +135,8 @@ class DiscoveredMaster(object):
         self.callback_master_state = callback_master_state
         self.ts_last_request = 0
         self._errors = dict()  # ERR_*, msg
+        self.monitor_hostname = get_hostname(monitoruri)
+        self.master_hostname = None
         self.masteruriaddr = None
         # create a thread to retrieve additional information about the remote ROS master
         self._get_into_timer = threading.Timer(0.1, self.__retrieve_masterinfo)
@@ -341,7 +343,6 @@ class DiscoveredMaster(object):
                         timetosleep = 30
                     self.__start_get_info_timer(timetosleep)
                 except:
-                    import traceback
                     msg = "connection error [%s]: %s" % (self.monitoruri, traceback.format_exc())
                     rospy.logwarn(msg)
                     self._add_error(self.ERR_SOCKET, msg)
@@ -356,8 +357,8 @@ class DiscoveredMaster(object):
                         self.online = True
                         # resolve the masteruri. Print an error if not reachable
                         try:
-                            uri = urlparse(self.masteruri)
-                            self.masteruriaddr = socket.gethostbyname(uri.hostname)
+                            self.master_hostname = get_hostname(self.masteruri)
+                            self.masteruriaddr = socket.gethostbyname(self.master_hostname)
                             self._del_error(self.ERR_RESOLVE_NAME)
                         except socket.gaierror:
                             msg = "Master discovered with not known hostname ROS_MASTER_URI:='%s'. Fix your network settings!" % str(self.masteruri)
@@ -365,7 +366,6 @@ class DiscoveredMaster(object):
                             self._add_error(self.ERR_RESOLVE_NAME, msg)
                             self.__start_get_info_timer(3.)
                         except:
-                            import traceback
                             msg = "resolve error [%s]: %s" % (self.monitoruri, traceback.format_exc())
                             rospy.logwarn(msg)
                             self._add_error(self.ERR_SOCKET, msg)
@@ -748,7 +748,6 @@ class Discoverer(object):
                 rospy.logdebug('Send request as unicast to all robot hosts %s' % self.robots)
                 self.socket.send_queued(msg, self.robots)
         except Exception as e:
-            import traceback
             print traceback.format_exc()
             rospy.logwarn("Send with addresses '%s' failed: %s" % (addresses, e))
 
@@ -987,7 +986,7 @@ class Discoverer(object):
                 raise Exception("old heartbeat version %s detected (current: %s), please update master_discovery on %s" % (version, Discoverer.VERSION, address))
             else:
                 raise Exception("heartbeat version %s expected, received: %s" % (Discoverer.VERSION, version))
-        raise Exception("massage is to small")
+        raise Exception("message is too small")
 
     def timed_stats_calculation(self):
         '''
@@ -1032,7 +1031,6 @@ class Discoverer(object):
                     rospy.Service('~list_masters', DiscoverMasters, self.rosservice_list_masters)
                     rospy.Service('~refresh', std_srvs.srv.Empty, self.rosservice_refresh)
             except:
-                import traceback
                 traceback.print_exc()
 
     def publish_stats(self, stats):
@@ -1047,7 +1045,6 @@ class Discoverer(object):
             try:
                 self.pubstats.publish(stats)
             except:
-                import traceback
                 traceback.print_exc()
 
     def update_master_errors(self):
@@ -1062,10 +1059,8 @@ class Discoverer(object):
                     # test for resolved addr
                     if v.mastername is not None and not v.errors and v.masteruri != self.master_monitor.getMasteruri():
                         try:
-                            o = urlparse(v.masteruri)
-                            mo = urlparse(v.monitoruri)
-                            if v.masteruriaddr != mo.hostname:
-                                msg = "Resolved host of ROS_MASTER_URI %s=%s and origin discovered IP=%s are different. Fix your network settings and restart master_dicovery!" % (o.hostname, v.masteruriaddr, mo.hostname)
+                            if v.masteruriaddr != v.monitor_hostname:
+                                msg = "Resolved host of ROS_MASTER_URI %s=%s and origin discovered IP=%s are different. Fix your network settings and restart master_discovery!" % (v.master_hostname, v.masteruriaddr, v.monitor_hostname)
                                 if v.masteruriaddr is None or not v.masteruriaddr.startswith('127.'):
                                     local_addresses = ['localhost'] + roslib.network.get_local_addresses()
                                     # check 127/8 and local addresses
@@ -1077,7 +1072,7 @@ class Discoverer(object):
                             result.append("%s" % e)
                             rospy.logwarn("Error while resolve address for %s: %s" % (v.masteruri, e))
                 try:
-                    for addr, msg in SEND_ERRORS.items():
+                    for _addr, msg in SEND_ERRORS.items():
                         result.append('%s' % msg)
                 except:
                     pass
@@ -1103,7 +1098,6 @@ class Discoverer(object):
                                                  v.discoverername,
                                                  v.monitoruri))
             except:
-                import traceback
                 traceback.print_exc()
         return DiscoverMastersResponse(masters)
 
@@ -1121,6 +1115,5 @@ class Discoverer(object):
                 self._request_state()
 #        self._send_current_state()
             except:
-                import traceback
                 traceback.print_exc()
         return []
