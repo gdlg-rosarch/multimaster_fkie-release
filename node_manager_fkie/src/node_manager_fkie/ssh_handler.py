@@ -33,13 +33,22 @@
 import os
 import paramiko
 import shlex
-import sys
 import threading
 
 import rospy
 
 from supervised_popen import SupervisedPopen
 import node_manager_fkie as nm
+
+import Crypto.Cipher.AES
+orig_new = Crypto.Cipher.AES.new
+
+
+# workaround for https://github.com/paramiko/paramiko/pull/714
+def fixed_AES_new(key, mode, IV='', counter=None, segment_size=0):
+    if Crypto.Cipher.AES.MODE_CTR == mode:
+        IV = ''
+    return orig_new(key, mode, IV, counter, segment_size)
 
 
 class AuthenticationRequest(Exception):
@@ -63,6 +72,8 @@ class SSHhandler(object):
     SSH_AUTH = {}  # host : user
 
     def __init__(self):
+        # workaround for https://github.com/paramiko/paramiko/pull/714
+        Crypto.Cipher.AES.new = fixed_AES_new
         self.mutex = threading.RLock()
 
     def remove(self, host):
@@ -193,7 +204,7 @@ class SSHhandler(object):
     def _getSSH(self, host, user, pw=None, do_connect=True, auto_pw_request=False):
         '''
         @return: the paramiko ssh client
-        @rtype: L{paramiko.SSHClient}
+        @rtype: U{paramiko.SSHClient<http://docs.paramiko.org/en/1.10/api/client.html>}
         @raise BadHostKeyException: - if the server's host key could not be verified
         @raise AuthenticationException: - if authentication failed
         @raise SSHException: - if there was any other error connecting or establishing an SSH session
