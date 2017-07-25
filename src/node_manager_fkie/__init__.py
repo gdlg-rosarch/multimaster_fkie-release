@@ -58,8 +58,8 @@ PKG_NAME = 'node_manager_fkie'
 __author__ = "Alexander Tiderko (Alexander.Tiderko@fkie.fraunhofer.de)"
 __copyright__ = "Copyright (c) 2012 Alexander Tiderko, Fraunhofer FKIE/US"
 __license__ = "BSD"
-__version__ = "0.7.4"  # git describe --tags --dirty --always
-__date__ = "2017-05-03"  # git log -1 --date=iso
+__version__ = "0.7.5"  # git describe --tags --dirty --always
+__date__ = "2017-07-17"  # git log -1 --date=iso
 
 # PYTHONVER = (2, 7, 1)
 # if sys.version_info < PYTHONVER:
@@ -341,7 +341,7 @@ def init_main_window(prog_name, masteruri, launch_files=[]):
     try:
         log_level = getattr(rospy, rospy.get_param('/%s/log_level' % prog_name, "INFO"))
     except Exception as err:
-        print "Error while set the log level: %s\n->INFO level will be used!" % err
+        print("Error while set the log level: %s\n->INFO level will be used!" % err)
         log_level = rospy.INFO
     rospy.init_node(prog_name, anonymous=False, log_level=log_level)
     set_terminal_name(prog_name)
