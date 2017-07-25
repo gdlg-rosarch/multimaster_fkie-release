@@ -129,6 +129,9 @@ class MasterViewProxy(QWidget):
     loaded_config = Signal(str, object)
     '''@ivar: the signal is emitted, after a launchfile is successful loaded (launchfile, LaunchConfig)'''
 
+    save_profile_signal = Signal(str)
+    '''@ivar: the signal is emitted, to save profile. (masteruri) If masteruri is empty, save all masters else only for this master.'''
+
     DIAGNOSTIC_LEVELS = {0: 'OK',
                          1: 'WARN',
                          2: 'ERROR',
@@ -150,13 +153,13 @@ class MasterViewProxy(QWidget):
             self.mastername = get_hostname(self.masteruri)
         except:
             pass
-        self.__current_path = os.path.expanduser('~')
 
         self._tmpObjects = []
         self.__master_state = None
         self.__master_info = None
         self.__force_update = False
         self.__configs = dict()  # [file name] : LaunchConfig or tuple(ROS node name, ROS service uri, ROS master URI) : ROS nodes
+        self.__online = False
 #    self.rosconfigs = dict() # [launch file path] = LaunchConfig()
         self.__in_question = []  # stores the changed files, until the user is interacted
 #    self.__uses_confgs = dict() # stores the decisions of the user for used configuration to start of node
@@ -176,6 +179,7 @@ class MasterViewProxy(QWidget):
         self.__last_selection = 0
         self._on_stop_kill_roscore = False
         self._on_stop_poweroff = False
+        self._start_nodes_after_load_cfg = dict()
         # store the running_nodes to update to duplicates after load a launch file
         self.__running_nodes = dict()  # dict (node name : masteruri)
         self.default_cfg_handler = DefaultConfigHandler()
@@ -194,7 +198,7 @@ class MasterViewProxy(QWidget):
         tabLayout = QVBoxLayout(self)
         tabLayout.setContentsMargins(0, 0, 0, 0)
         tabLayout.addWidget(self.masterTab)
-        self._progress_queue = ProgressQueue(self.masterTab.progressFrame, self.masterTab.progressBar, self.masterTab.progressCancelButton)
+        self._progress_queue = ProgressQueue(self.masterTab.progressFrame, self.masterTab.progressBar, self.masterTab.progressCancelButton, 'Master - %s' % self.mastername)
 
         # setup the node view
         self.node_tree_model = NodeTreeModel(nm.nameres().address(self.masteruri), self.masteruri)
@@ -342,21 +346,16 @@ class MasterViewProxy(QWidget):
         self._shortcut_stop = QShortcut(QKeySequence(self.tr("Alt+S", "stop selected nodes")), self)
         self._shortcut_stop.activated.connect(self.on_stop_clicked)
 
-        self._shortcut_copy = QShortcut(QKeySequence(self.tr("Ctrl+C", "copy selected values to clipboard")), self)
-        self._shortcut_copy.activated.connect(self.on_copy_c_pressed)
-        self._shortcut_copy = QShortcut(QKeySequence(self.tr("Ctrl+X", "copy selected alternative values to clipboard")), self)
-        self._shortcut_copy.activated.connect(self.on_copy_x_pressed)
+#        self._shortcut_copy = QShortcut(QKeySequence(self.tr("Ctrl+C", "copy selected values to clipboard")), self)
+#        self._shortcut_copy.activated.connect(self.on_copy_c_pressed)
+#        self._shortcut_copy = QShortcut(QKeySequence(self.tr("Ctrl+X", "copy selected alternative values to clipboard")), self)
+#        self._shortcut_copy.activated.connect(self.on_copy_x_pressed)
 
 #    print "================ create", self.objectName()
 #
-#  def __del__(self):
-#    print "    Destroy mester view proxy", self.objectName(), " ..."
-#     for ps in self.__echo_topics_dialogs.values():
-#       try:
-#         ps.terminate()
-#       except:
-#         pass
-#    print "    ", self.objectName(), "destroyed"
+#     def __del__(self):
+#        print "    Destroy mester view proxy", self.objectName(), " ..."
+#        print "    ", self.objectName(), "destroyed"
 
     def stop(self):
         print "  Shutdown master", self.masteruri, "..."
@@ -384,6 +383,18 @@ class MasterViewProxy(QWidget):
     @property
     def is_local(self):
         return nm.is_local(get_hostname(self.masteruri))
+
+    @property
+    def online(self):
+        '''
+        The online meens that master is discovered and master_info was received.
+        '''
+        return self.__online
+
+    @online.setter
+    def online(self, state):
+        self.__online = state
+        self._start_process_queue()
 
     @property
     def master_state(self):
@@ -425,6 +436,7 @@ class MasterViewProxy(QWidget):
             try:
                 if (master_info.masteruri == self.masteruri):
                     self.update_system_parameter()
+                    self.online = True
                 # request the info of new remote nodes
                 hosts2update = set([get_hostname(self.__master_info.getNode(nodename).uri) for nodename in update_result[0]])
                 hosts2update.update([get_hostname(self.__master_info.getService(nodename).uri) for nodename in update_result[6]])
@@ -455,6 +467,10 @@ class MasterViewProxy(QWidget):
 #      print "  update on ", self.__master_info.mastername if not self.__master_info is None else self.__master_state.name, cputime
         except:
             print traceback.format_exc(1)
+
+    def _start_process_queue(self):
+        if self.online and self.master_info is not None:
+            self._progress_queue.start()
 
     @property
     def use_sim_time(self):
@@ -561,7 +577,7 @@ class MasterViewProxy(QWidget):
         self.masterTab.editConfigButton.setEnabled(cfg_enable and len(selectedNodes) == 1)
 #    self.startNodesAtHostAct.setEnabled(cfg_enable)
         self.masterTab.editRosParamButton.setEnabled(len(selectedNodes) == 1)
-        self.masterTab.saveButton.setEnabled(len(self.launchfiles) > 1)
+        # self.masterTab.saveButton.setEnabled(len(self.launchfiles) > 1)
         # enable the close button only for local configurations
         self.masterTab.closeCfgButton.setEnabled(True)
 #    self.masterTab.closeCfgButton.setEnabled(len([path for path, _ in self.__configs.items() if (isinstance(path, tuple) and path[2] == self.masteruri) or not isinstance(path, tuple)]) > 0) #_:=cfg
@@ -607,11 +623,15 @@ class MasterViewProxy(QWidget):
         @param launchfile: the launch file path
         @type launchfile: C{str}
         '''
+        lfile = launchfile
+        argv = []
+        if isinstance(launchfile, tuple):
+            lfile, argv = launchfile
         self._progress_queue.add2queue(str(uuid.uuid4()),
-                                       'Loading %s' % os.path.basename(launchfile),
+                                       'Loading %s' % os.path.basename(lfile),
                                        self._load_launchfile,
-                                       (launchfile,))
-        self._progress_queue.start()
+                                       (lfile, argv))
+        self._start_process_queue()
 
     def _load_launchfile(self, launchfile, argv_forced=[], pqid=None):
         '''
@@ -664,7 +684,7 @@ class MasterViewProxy(QWidget):
             raise DetailedError("Loading launch file", err_text, err_details)
 #      WarningMessageBox(QMessageBox.Warning, "Loading launch file", err_text, err_details).exec_()
         except:
-            print traceback.format_exc(1)
+            print traceback.format_exc(3)
 
     def _apply_launch_config(self, launchfile, launchConfig):
         stored_roscfg = None
@@ -680,7 +700,7 @@ class MasterViewProxy(QWidget):
             # add launch file object to the list
             self.__configs[launchfile] = launchConfig
             self.appendConfigToModel(launchfile, launchConfig.Roscfg)
-            self.masterTab.tabWidget.setCurrentIndex(0)
+#            self.masterTab.tabWidget.setCurrentIndex(0)
             # get the descriptions of capabilities and hosts
             try:
                 robot_descr = launchConfig.getRobotDescr()
@@ -689,19 +709,19 @@ class MasterViewProxy(QWidget):
                     if not host:
                         host = nm.nameres().mastername(self.masteruri)
                     host_addr = nm.nameres().address(host)
-                    self.node_tree_model.addCapabilities(nm.nameres().masteruri(host), host_addr, launchfile, caps)
+                    self.node_tree_model.addCapabilities(self.masteruri, host_addr, launchfile, caps)
                 for (host, descr) in robot_descr.items():
                     if not host:
                         host = nm.nameres().mastername(self.masteruri)
                     host_addr = nm.nameres().address(host)
-                    tooltip = self.node_tree_model.updateHostDescription(nm.nameres().masteruri(host), host_addr, descr['type'], descr['name'], descr['description'])
+                    tooltip = self.node_tree_model.updateHostDescription(self.masteruri, host_addr, descr['type'], descr['name'], descr['description'])
                     self.host_description_updated.emit(self.masteruri, host_addr, tooltip)
             except:
-                print traceback.format_exc(1)
+                import traceback
+                print traceback.format_exc()
 
             # by this call the name of the host will be updated if a new one is defined in the launch file
             self.updateRunningNodesInModel(self.__master_info)
-
             # detect files changes
             if stored_roscfg and self.__configs[launchfile].Roscfg:
                 stored_values = [(name, str(p.value)) for name, p in stored_roscfg.params.items()]
@@ -763,13 +783,16 @@ class MasterViewProxy(QWidget):
 #      print "ERRORS:", launchConfig.Roscfg.config_errors
 #
 #      print "M:", launchConfig.Roscfg.m
+            if launchfile in self._start_nodes_after_load_cfg:
+                self.start_nodes_by_name(self._start_nodes_after_load_cfg[launchfile], launchfile, True)
+                del self._start_nodes_after_load_cfg[launchfile]
         except Exception as e:
             err_text = ''.join([os.path.basename(launchfile), ' loading failed!'])
             err_details = ''.join([err_text, '\n\n', e.__class__.__name__, ": ", str(e)])
             rospy.logwarn("Loading launch file: %s", err_details)
             WarningMessageBox(QMessageBox.Warning, "Loading launch file", err_text, err_details).exec_()
         except:
-            print traceback.format_exc(1)
+            print traceback.format_exc(3)
         self.update_robot_icon(True)
 
     def reload_global_parameter_at_next_start(self, launchfile):
@@ -797,7 +820,7 @@ class MasterViewProxy(QWidget):
                                 if isinstance(item, (GroupItem, HostItem)):
                                     result.append(item.name)
         except:
-            print traceback.format_exc(1)
+            print traceback.format_exc(3)
         return result
 
     def _expand_groups(self, groups=None):
@@ -819,7 +842,7 @@ class MasterViewProxy(QWidget):
                                     if groups is None or item.name in groups:
                                         self.masterTab.nodeTreeView.setExpanded(index_cap, True)
         except:
-            print traceback.format_exc(1)
+            print traceback.format_exc(3)
 
     def update_robot_icon(self, force=False):
         '''
@@ -851,9 +874,9 @@ class MasterViewProxy(QWidget):
         @type rosconfig: L{LaunchConfig}
         '''
         hosts = dict()  # dict(addr : dict(node : [config]) )
+        addr = nm.nameres().address(self.masteruri)
+        masteruri = self.masteruri
         for n in rosconfig.nodes:
-            addr = nm.nameres().address(self.masteruri)
-            masteruri = self.masteruri
             if n.machine_name and not n.machine_name == 'localhost':
                 if n.machine_name not in rosconfig.machines:
                     raise Exception(''.join(["ERROR: unknown machine [", n.machine_name, "]"]))
@@ -931,7 +954,8 @@ class MasterViewProxy(QWidget):
             service = self.__master_info.getService(config_name)
             if service is not None:
                 masteruri = service.masteruri
-        key = (roslib.names.namespace(config_name).rstrip(roslib.names.SEP), service_uri, masteruri)
+        cfg_name = roslib.names.namespace(config_name).rstrip(roslib.names.SEP)
+        key = (cfg_name, service_uri, masteruri)
 #    if self.__configs.has_key(key):
 #      self.node_tree_model.removeConfigNodes(key)
         # add the new config
@@ -944,6 +968,10 @@ class MasterViewProxy(QWidget):
             host_addr = host
         self.node_tree_model.appendConfigNodes(masteruri, host_addr, node_cfgs)
         self.__configs[key] = nodes
+        # start nodes in the queue
+        if cfg_name in self._start_nodes_after_load_cfg:
+            self.start_nodes_by_name(self._start_nodes_after_load_cfg[cfg_name], roslib.names.ns_join(cfg_name, 'run'), True)
+            del self._start_nodes_after_load_cfg[cfg_name]
         self.updateButtons()
 
     def on_default_cfg_descr_retrieved(self, service_uri, config_name, items):
@@ -1061,7 +1089,7 @@ class MasterViewProxy(QWidget):
                 raise DetailedError("Kill error",
                                     ''.join(['Error while kill roslaunch ', lsuri]),
                                     str(e))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # %%%%%%%%%%%%%   Handling of the view activities                  %%%%%%%%
@@ -1153,7 +1181,8 @@ class MasterViewProxy(QWidget):
                 # reduce the displayed name
                 item_name = i
                 if name:
-                    item_name = item_name.replace('%s%s' % (name, roslib.names.SEP), '~', 1)
+                    if item_name.startswith(name):
+                        item_name = item_name.replace('%s%s' % (name, roslib.names.SEP), '~', 1)
                     ns = roslib.names.namespace(name)
                     if item_name.startswith(ns) and ns != roslib.names.SEP:
                         item_name = item_name.replace(ns, '', 1)
@@ -1201,8 +1230,8 @@ class MasterViewProxy(QWidget):
         return result
 
     def on_tab_current_changed(self, index):
-        tab_name = self.masterTab.tabWidget.tabText(index).replace('&', '')
-        if tab_name == 'Topics':
+        tab_name = self.masterTab.tabWidget.currentWidget().objectName()
+        if tab_name == 'tabTopics':
             # select the topics of the selected node in the "Topic" view
             selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
             selectedNodes = self.nodesFromIndexes(selections)
@@ -1211,7 +1240,7 @@ class MasterViewProxy(QWidget):
                 selected_topics = self.topic_model.index_from_names(node.published, node.subscribed)
                 for s in selected_topics:
                     self.masterTab.topicsView.selectionModel().select(self.topic_proxyModel.mapFromSource(s), QItemSelectionModel.Select)
-        elif tab_name == 'Services':
+        elif tab_name == 'tabServices':
             # select the services of the selected node in the "Services" view
             selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
             selectedNodes = self.nodesFromIndexes(selections)
@@ -1222,7 +1251,7 @@ class MasterViewProxy(QWidget):
                     self.masterTab.servicesView.selectionModel().select(self.service_proxyModel.mapFromSource(s), QItemSelectionModel.Select)
 
     def _is_current_tab_name(self, tab_name):
-        return (self.masterTab.tabWidget.tabText(self.masterTab.tabWidget.currentIndex()).replace('&', '') == tab_name)
+        return (self.masterTab.tabWidget.currentWidget().objectName() == tab_name)
 
     def on_node_selection_changed(self, selected, deselected, force_emit=False, node_name=''):
         '''
@@ -1244,7 +1273,7 @@ class MasterViewProxy(QWidget):
             selections = []
         else:
             # get node by selected items
-            if not self._is_current_tab_name('Nodes'):
+            if not self._is_current_tab_name('tabNodes'):
                 return
             selections = self.masterTab.nodeTreeView.selectionModel().selectedIndexes()
             selectedHosts = self.hostsFromIndexes(selections)
@@ -1291,7 +1320,7 @@ class MasterViewProxy(QWidget):
             node = selectedNodes[0]
             text = self.get_node_description(node_name, node)
             name = node.name
-        if (self._is_current_tab_name('Nodes') and self.__last_info_text != text) or force_emit:
+        if (self._is_current_tab_name('tabNodes') and self.__last_info_text != text) or force_emit:
             self.__last_info_text = text
             self.description_signal.emit(name, text, True if selected or deselected or force_emit else False)
         self.updateButtons()
@@ -1382,7 +1411,7 @@ class MasterViewProxy(QWidget):
             if len(selectedTopics) == 0:
                 return
         else:
-            if not self._is_current_tab_name('Topics'):
+            if not self._is_current_tab_name('tabTopics'):
                 return
             selectedTopics = self.topicsFromIndexes(self.masterTab.topicsView.selectionModel().selectedIndexes())
             topics_selected = (len(selectedTopics) > 0)
@@ -1394,7 +1423,7 @@ class MasterViewProxy(QWidget):
             topic = selectedTopics[0]
             text = self.get_topic_description(topic_name, topic)
             info_text = '<div>%s</div>' % text
-            if (self._is_current_tab_name('Topics') and self.__last_info_text != info_text) or force_emit:
+            if (self._is_current_tab_name('tabTopics') and self.__last_info_text != info_text) or force_emit:
                 self.__last_info_text = info_text
                 self.description_signal.emit(topic.name, info_text, True if selected or deselected or force_emit else False)
 
@@ -1489,7 +1518,7 @@ class MasterViewProxy(QWidget):
             # get service by selected items
             selectedServices = self.servicesFromIndexes(self.masterTab.servicesView.selectionModel().selectedIndexes())
             self.masterTab.callServiceButton.setEnabled(len(selectedServices) > 0)
-            if not self._is_current_tab_name('Services'):
+            if not self._is_current_tab_name('tabServices'):
                 return
         if len(selectedServices) == 1:
             service = selectedServices[0]
@@ -1517,8 +1546,8 @@ class MasterViewProxy(QWidget):
                 else:
                     text += '<font color=red>Try to refresh <b>all</b> hosts. Is provider node running?</font>'
             info_text = '<div>%s</div>' % text
-            self._is_current_tab_name('Services')
-            if (self._is_current_tab_name('Services') and self.__last_info_text != info_text) or force_emit:
+            self._is_current_tab_name('tabServices')
+            if (self._is_current_tab_name('tabServices') and self.__last_info_text != info_text) or force_emit:
                 self.__last_info_text = info_text
                 self.description_signal.emit(service.name, info_text, True if selected or deselected or force_emit else False)
 
@@ -1695,25 +1724,35 @@ class MasterViewProxy(QWidget):
                     if ret == QMessageBox.No:
                         return
                 # determine the used configuration
-                choices = self._getCfgChoises(node)
-                ch_keys = choices.keys()
-                if ch_keys:
-                    ch_keys.sort()
-                    choises_str = str(ch_keys)
-                    if choises_str not in cfg_choices.keys():
-                        choice, ok = self._getUserCfgChoice(choices, node.name)
-                        if choice is not None:
-                            cfg_choices[choises_str] = choices[choice]
-                            cfg_nodes[node.name] = choices[choice]
-                            if isinstance(choices[choice], LaunchConfig):
-                                has_launch_files = True
-                        elif ok:
-                            WarningMessageBox(QMessageBox.Warning, "Start error",
-                                              'Error while start %s:\nNo configuration selected!' % node.name).exec_()
+                if node.next_start_cfg is not None:
+                    lcfg = node.next_start_cfg
+                    if node.next_start_cfg in self.launchfiles:
+                        lcfg = self.launchfiles[node.next_start_cfg]
+                    cfg_nodes[node.name] = lcfg
+                    node.launched_cfg = lcfg
+                    node.next_start_cfg = None
+                else:
+                    choices = self._getCfgChoises(node)
+                    ch_keys = choices.keys()
+                    if ch_keys:
+                        ch_keys.sort()
+                        choises_str = str(ch_keys)
+                        if choises_str not in cfg_choices.keys():
+                            choice, ok = self._getUserCfgChoice(choices, node.name)
+                            if choice is not None:
+                                cfg_choices[choises_str] = choices[choice]
+                                cfg_nodes[node.name] = choices[choice]
+                                node.launched_cfg = choices[choice]
+                                if isinstance(choices[choice], LaunchConfig):
+                                    has_launch_files = True
+                            elif ok:
+                                WarningMessageBox(QMessageBox.Warning, "Start error",
+                                                  'Error while start %s:\nNo configuration selected!' % node.name).exec_()
+                            else:
+                                break
                         else:
-                            break
-                    else:
-                        cfg_nodes[node.name] = cfg_choices[choises_str]
+                            cfg_nodes[node.name] = cfg_choices[choises_str]
+                            node.launched_cfg = cfg_choices[choises_str]
 
         # get the advanced configuration
         logging = None
@@ -1753,7 +1792,7 @@ class MasterViewProxy(QWidget):
                                                    ''.join(['start ', node.node_info.name]),
                                                    self.start_node,
                                                    (node.node_info, force, cfg_nodes[node.node_info.name], force_host, logging))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     def start_nodes_by_name(self, nodes, cfg, force=False):
         '''
@@ -1764,11 +1803,44 @@ class MasterViewProxy(QWidget):
         result = []
         if self.master_info is not None:
             for n in nodes:
-                node_info = NodeInfo(n, self.masteruri)
-                node_item = NodeItem(node_info)
-                node_item.addConfig(cfg)
-                result.append(node_item)
+                node_items = self.getNode(n)
+                if node_items:
+                    node_item = node_items[0]
+#                    node_item.addConfig(cfg)
+                    if isinstance(cfg, tuple):
+                        node_item.next_start_cfg = cfg[0]
+                    else:
+                        node_item.next_start_cfg = cfg
+                elif cfg:
+                    node_info = NodeInfo(n, self.masteruri)
+                    node_item = NodeItem(node_info)
+#                    node_item.addConfig(cfg)
+                    if isinstance(cfg, tuple):
+                        node_item.next_start_cfg = cfg[0]
+                    else:
+                        node_item.next_start_cfg = cfg
+                if node_item is not None:
+                    result.append(node_item)
         self.start_nodes(result, force)
+
+    def start_nodes_after_load_cfg(self, cfg_name, nodes, force=False):
+        '''
+        Start nodes after the given configuration is loaded and applied to the model.
+        :param cfg_name: the name of the cnofiguration
+        :type cfg_name: str
+        :param nodes: the list of node names
+        :type nodes: list of strings
+        '''
+        if cfg_name not in self._start_nodes_after_load_cfg:
+            self._start_nodes_after_load_cfg[cfg_name] = set(nodes)
+        else:
+            self._start_nodes_after_load_cfg[cfg_name].update(set(nodes))
+
+    def start_nodes_after_load_cfg_clear(self):
+        '''
+        Clears the list with nodes which should be startet after a launch file is loaded.
+        '''
+        self._start_nodes_after_load_cfg = dict()
 
     def on_force_start_nodes(self):
         '''
@@ -1901,7 +1973,7 @@ class MasterViewProxy(QWidget):
                                            'stop %s' % node.name,
                                            self.stop_node,
                                            (node, (len(nodes) == 1) or force))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     def stop_nodes_by_name(self, nodes, force=False, ignore=[]):
         '''
@@ -1938,7 +2010,7 @@ class MasterViewProxy(QWidget):
                                                    ''.join(['kill ', node.name, '(', str(pid), ')']),
                                                    nm.starter().kill,
                                                    (self.getHostFromNode(node), pid, False, self.current_user))
-                    self._progress_queue.start()
+                    self._start_process_queue()
                 except Exception as e:
                     rospy.logwarn("Error while kill the node %s: %s", str(node.name), str(e))
                     raise DetailedError("Kill error",
@@ -1955,7 +2027,7 @@ class MasterViewProxy(QWidget):
                                                    'killall roscore on %s' % host,
                                                    nm.starter().killall_roscore,
                                                    (host, self.current_user))
-                    self._progress_queue.start()
+                    self._start_process_queue()
                 else:
                     nm.starter().killall_roscore(host, self.current_user)
             except Exception as e:
@@ -1974,7 +2046,7 @@ class MasterViewProxy(QWidget):
                                            ''.join(['kill ', node.name]),
                                            self.kill_node,
                                            (node, (len(selectedNodes) == 1)))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     def unregister_node(self, node, force=False):
         if node is not None and node.uri is not None and (not self._is_in_ignore_list(node.name) or force):
@@ -2025,7 +2097,7 @@ class MasterViewProxy(QWidget):
                                                ''.join(['unregister node ', node.name]),
                                                self.unregister_node,
                                                (node, (len(selectedNodes) == 1)))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     def on_stop_context_toggled(self, state):
         menu = QMenu(self)
@@ -2079,7 +2151,7 @@ class MasterViewProxy(QWidget):
                                                            ''.join(['show IO of ', node.name]),
                                                            nm.screen().openScreen,
                                                            (node.name, self.getHostFromNode(node), False, self.current_user))
-                        self._progress_queue.start()
+                        self._start_process_queue()
                 else:
                     self.on_show_all_screens()
             finally:
@@ -2098,7 +2170,7 @@ class MasterViewProxy(QWidget):
                                                ''.join(['kill screen of ', node.name]),
                                                nm.screen().killScreens,
                                                (node.name, self.getHostFromNode(node), False, self.current_user))
-            self._progress_queue.start()
+            self._start_process_queue()
         finally:
             self.setCursor(cursor)
 
@@ -2151,7 +2223,7 @@ class MasterViewProxy(QWidget):
                                                    ''.join(['show log of ', node.name]),
                                                    nm.starter().openLog,
                                                    (node.name, self.getHostFromNode(node), self.current_user, only_screen))
-                self._progress_queue.start()
+                self._start_process_queue()
         except Exception, e:
             print traceback.format_exc(1)
             rospy.logwarn("Error while show log: %s", str(e))
@@ -2176,7 +2248,7 @@ class MasterViewProxy(QWidget):
 #                                   'Get log path',
 #                                   nm.starter().get_log_path,
 #                                   (get_hostname(self.masteruri), nodenames))
-#    self._progress_queue.start()
+#    self._start_process_queue()
 
 #  def on_log_show_selected(self):
 #    try:
@@ -2199,7 +2271,7 @@ class MasterViewProxy(QWidget):
                                            ''.join(['delete Log of ', node.name]),
                                            nm.starter().deleteLog,
                                            (node.name, self.getHostFromNode(node), False, self.current_user))
-        self._progress_queue.start()
+        self._start_process_queue()
 
     def on_dynamic_config_clicked(self):
         '''
@@ -2264,29 +2336,8 @@ class MasterViewProxy(QWidget):
                 rospy.logwarn("Error on retrieve parameter for %s: %s", str(node.name), traceback.format_exc(1))
 
     def on_save_clicked(self):
-        (fileName, _) = QFileDialog.getSaveFileName(self,
-                                                    "New launch file",
-                                                    self.__current_path,
-                                                    "Config files (*.launch);;All files (*)")  # _:=filter
-        if fileName:
-            self.__current_path = os.path.dirname(fileName)
-            try:
-                (pkg, _) = package_name(os.path.dirname(fileName))  # _:=pkg_path
-                if pkg is None:
-                    ret = WarningMessageBox(QMessageBox.Warning, "New File Error",
-                                            'The new file is not in a ROS package', buttons=QMessageBox.Ok | QMessageBox.Cancel).exec_()
-                    if ret == QMessageBox.Cancel:
-                        return
-                with open(fileName, 'w+') as f:
-                    f.write("<launch>\n")
-                    for lfile in self.launchfiles.keys():
-                        with open(lfile, 'r') as lf:
-                            f.write(re.sub('<\/?launch\ *\t*>', '', lf.read()))
-                    f.write("</launch>\n")
-            except EnvironmentError as e:
-                WarningMessageBox(QMessageBox.Warning, "New File Error",
-                                  'Error while create a new file',
-                                  str(e)).exec_()
+        # save the profile
+        self.save_profile_signal.emit('')
 
     def on_close_clicked(self):
         '''
@@ -2343,7 +2394,7 @@ class MasterViewProxy(QWidget):
                                            'poweroff `%s`' % self.mastername,
                                            nm.starter().poweroff,
                                            ('%s' % self.mastername,))
-            self._progress_queue.start()
+            self._start_process_queue()
         except (Exception, nm.StartException), emsg:
             rospy.logwarn("Error while poweroff %s: %s", self.mastername, str(emsg))
             WarningMessageBox(QMessageBox.Warning, "Run error",
@@ -2506,7 +2557,7 @@ class MasterViewProxy(QWidget):
                                                'start publisher for %s' % topic_name,
                                                nm.starter().runNodeWithoutConfig,
                                                (nm.nameres().address(self.masteruri), 'rostopic', 'rostopic', 'rostopic_pub%s%s%s' % (topic_name, opt_name_suf, str(rospy.Time.now())), [pub_cmd], self.masteruri, False, self.current_user))
-                self._progress_queue.start()
+                self._start_process_queue()
                 return True
             else:
                 return False
@@ -2574,8 +2625,10 @@ class MasterViewProxy(QWidget):
             import shlex
             env = dict(os.environ)
             env["ROS_MASTER_URI"] = str(self.masteruri)
-            nodename = 'echo_%s%s%s%s' % ('hz_' if show_hz_only else '', 'ssh_' if use_ssh else '', str(get_hostname(self.masteruri)), topic.name)
-            cmd = 'rosrun node_manager_fkie node_manager --echo %s %s %s %s __name:=%s' % (topic.name, topic.type, '--hz' if show_hz_only else '', '--ssh' if use_ssh else '', nodename)
+            namespace = rospy.names.namespace(topic.name)
+            nodename = os.path.basename(topic.name)
+            namespace = 'echo_%s%s%s%s' % ('hz_' if show_hz_only else '', 'ssh_' if use_ssh else '', str(get_hostname(self.masteruri)), namespace)
+            cmd = 'rosrun node_manager_fkie node_manager --echo %s %s %s %s __name:=%s __ns:=%s' % (topic.name, topic.type, '--hz' if show_hz_only else '', '--ssh' if use_ssh else '', nodename, namespace)
             rospy.loginfo("Echo topic: %s" % cmd)
             ps = SupervisedPopen(shlex.split(cmd), env=env, stderr=None, close_fds=True, object_id=topic.name, description='Echo topic: %s' % topic.name)
             ps.finished.connect(self._topic_dialog_closed)
@@ -2721,10 +2774,10 @@ class MasterViewProxy(QWidget):
             # (fileName, filter)
             (fileName, _) = QFileDialog.getSaveFileName(self,
                                                         "Save parameter",
-                                                        self.__current_path,
+                                                        nm.settings().current_dialog_path,
                                                         "YAML files (*.yaml);;All files (*)")
             if fileName:
-                self.__current_path = os.path.dirname(fileName)
+                nm.settings().current_dialog_path = os.path.dirname(fileName)
                 try:
                     with open(fileName, 'w+') as f:
                         values = dict()
