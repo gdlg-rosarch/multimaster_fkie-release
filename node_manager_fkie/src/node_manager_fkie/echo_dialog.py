@@ -30,7 +30,6 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-
 from datetime import datetime
 from python_qt_binding.QtCore import Qt, QUrl, QTimer, Signal
 from python_qt_binding.QtGui import QIcon, QTextDocument
@@ -55,10 +54,15 @@ import node_manager_fkie as nm
 # import roslib
 class EchoDialog(QDialog):
 
+    MESSAGE_CHARS_LIMIT = 1000
     MESSAGE_LINE_LIMIT = 128
     MESSAGE_HZ_LIMIT = 10
     MAX_DISPLAY_MSGS = 25
-    STATISTIC_QUEUE_LEN = 5000
+    STATISTIC_QUEUE_LEN = 1000
+    SHOW_BYTES = True
+    SHOW_JITTER = True
+    SHOW_STD_DEV = False
+    SHOW_WINDOW_SIZE = False
 
     '''
   This dialog shows the output of a topic.
@@ -118,39 +122,58 @@ class EchoDialog(QDialog):
         self.msg_t0 = -1.
         self.msg_tn = 0
         self.times = []
+        self.bytes = []
 
         self.message_count = 0
-        self._rate_message = ''
+        self._state_message = ''
         self._scrapped_msgs = 0
         self._scrapped_msgs_sl = 0
 
         self._last_received_ts = 0
+        self.chars_limit = self.MESSAGE_CHARS_LIMIT
         self.receiving_hz = self.MESSAGE_HZ_LIMIT
         self.line_limit = self.MESSAGE_LINE_LIMIT
 
         self.field_filter_fn = None
+        self._latched = False
+        self._msgs = []
 
         options = QWidget(self)
         if not show_only_rate:
             hLayout = QHBoxLayout(options)
             hLayout.setContentsMargins(1, 1, 1, 1)
-            self.no_str_checkbox = no_str_checkbox = QCheckBox('Hide strings')
+            filter_string_label = QLabel('Strings:', self)
+            hLayout.addWidget(filter_string_label)
+            self.no_str_checkbox = no_str_checkbox = QCheckBox('hide')
             no_str_checkbox.toggled.connect(self.on_no_str_checkbox_toggled)
             hLayout.addWidget(no_str_checkbox)
-            self.no_arr_checkbox = no_arr_checkbox = QCheckBox('Hide arrays')
-            no_arr_checkbox.toggled.connect(self.on_no_arr_checkbox_toggled)
-            hLayout.addWidget(no_arr_checkbox)
             self.combobox_reduce_ch = QComboBox(self)
             self.combobox_reduce_ch.addItems([str(self.MESSAGE_LINE_LIMIT), '0', '80', '256', '1024'])
             self.combobox_reduce_ch.activated[str].connect(self.combobox_reduce_ch_activated)
             self.combobox_reduce_ch.setEditable(True)
             self.combobox_reduce_ch.setToolTip("Set maximum line width. 0 disables the limit.")
             hLayout.addWidget(self.combobox_reduce_ch)
+            filter_array_label = QLabel('   Arrays:', self)
+            hLayout.addWidget(filter_array_label)
+            self.no_arr_checkbox = no_arr_checkbox = QCheckBox('hide')
+            no_arr_checkbox.toggled.connect(self.on_no_arr_checkbox_toggled)
+            hLayout.addWidget(no_arr_checkbox)
 #      reduce_ch_label = QLabel('ch', self)
 #      hLayout.addWidget(reduce_ch_label)
             # add spacer
             spacerItem = QSpacerItem(515, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
             hLayout.addItem(spacerItem)
+            filter_msg_label = QLabel('Msg:', self)
+            hLayout.addWidget(filter_msg_label)
+            # add combobox for displaying frequency of messages
+            self.combobox_chars_hz = QComboBox(self)
+            self.combobox_chars_hz.addItems([str(self.MESSAGE_CHARS_LIMIT), '0', '500', '1000', '5000'])
+            self.combobox_chars_hz.activated[str].connect(self.on_combobox_chars_activated)
+            self.combobox_chars_hz.setEditable(True)
+            self.combobox_chars_hz.setToolTip("Set maximum displayed chars of a message. 0 disables the limit.")
+            hLayout.addWidget(self.combobox_chars_hz)
+            displ_chars_label = QLabel('chars', self)
+            hLayout.addWidget(displ_chars_label)
             # add combobox for displaying frequency of messages
             self.combobox_displ_hz = QComboBox(self)
             self.combobox_displ_hz.addItems([str(self.MESSAGE_HZ_LIMIT), '0', '0.1', '1', '50', '100', '1000'])
@@ -233,6 +256,7 @@ class EchoDialog(QDialog):
         self.print_hz_timer = QTimer()
         self.print_hz_timer.timeout.connect(self._on_calc_hz)
         self.print_hz_timer.start(1000)
+        self._start_time = time.time()
 
 #    print "======== create", self.objectName()
 #
@@ -289,6 +313,21 @@ class EchoDialog(QDialog):
                 self.line_limit = float(ch_txt)
             except ValueError:
                 self.combobox_reduce_ch.setEditText(str(self.line_limit))
+        self.display.clear()
+        for msg, current_time in self._msgs:
+            self._append_message(msg, self._latched, current_time, False)
+
+    def on_combobox_chars_activated(self, chars_txt):
+        try:
+            self.chars_limit = int(chars_txt)
+        except ValueError:
+            try:
+                self.chars_limit = float(chars_txt)
+            except ValueError:
+                self.combobox_displ_chars.setEditText(str(self.chars_limit))
+        self.display.clear()
+        for msg, current_time in self._msgs:
+            self._append_message(msg, self._latched, current_time, False)
 
     def on_combobox_hz_activated(self, hz_txt):
         try:
@@ -312,12 +351,14 @@ class EchoDialog(QDialog):
             self.message_count = 0
             self._scrapped_msgs = 0
             del self.times[:]
+            del self.bytes[:]
 
     def on_topic_control_btn_clicked(self):
         try:
             if self.sub is None and self.ssh_output_file is None:
                 if self.__msg_class:
                     self.sub = rospy.Subscriber(self.topic, self.__msg_class, self._msg_handle)
+                    self._start_time = time.time()
                 else:
                     self._on_display_anchorClicked(QUrl(self._masteruri))
                 self.topic_control_button.setText('stop')
@@ -340,20 +381,43 @@ class EchoDialog(QDialog):
     def _msg_handle(self, data):
         self.msg_signal.emit(data, (data._connection_header['latching'] != '0'))
 
-    def _append_message(self, msg, latched):
+    def _append_message(self, msg, latched, current_time=None, store=True):
         '''
         Adds a label to the dialog's layout and shows the given text.
         @param msg: the text to add to the dialog
         @type msg: message object
         '''
-        current_time = time.time()
-        self._count_messages(current_time)
+        if current_time is None:
+            current_time = time.time()
+        self._latched = latched
+        if store:
+            self._msgs.append((msg, current_time))
+            if len(self._msgs) > 25:
+                self._msgs.pop()
+        msg_len = -1
+        if (self.SHOW_BYTES or self.show_only_rate):
+            buff = None
+            try:
+                from cStringIO import StringIO  # Python 2.x
+                buff = StringIO()
+                import os
+                msg.serialize(buff)
+                buff.seek(0, os.SEEK_END)
+                msg_len = buff.tell()
+            except ImportError:
+                from io import BytesIO  # Python 3.x
+                buff = BytesIO()
+                msg.serialize(buff)
+                msg_len = buff.getbuffer().nbytes
+        if store:
+            self._count_messages(current_time, msg_len)
         # skip messages, if they are received often then MESSAGE_HZ_LIMIT
         if self._last_received_ts != 0 and self.receiving_hz != 0:
-            if not latched and current_time - self._last_received_ts < 1.0 / self.receiving_hz:
-                self._scrapped_msgs += 1
-                self._scrapped_msgs_sl += 1
-                return
+            if current_time - self._last_received_ts < 1.0 / self.receiving_hz:
+                if (not latched or (latched and current_time - self._start_time > 3.0)):
+                    self._scrapped_msgs += 1
+                    self._scrapped_msgs_sl += 1
+                    return
         self._last_received_ts = current_time
         if not self.show_only_rate:
             # convert message to string and reduce line width to current limit
@@ -362,6 +426,10 @@ class EchoDialog(QDialog):
                 msg = msg[0]
             msg = self._trim_width(msg)
             msg = msg.replace('<', '&lt;').replace('>', '&gt;')
+            msg_cated = False
+            if self.chars_limit != 0 and len(msg) > self.chars_limit:
+                msg = msg[0:self.chars_limit]
+                msg_cated = True
             # create a notification about scrapped messages
             if self._scrapped_msgs_sl > 0:
                 txt = '<pre style="color:red; font-family:Fixedsys,Courier,monospace; padding:10px;">scrapped %s message because of Hz-settings</pre>' % self._scrapped_msgs_sl
@@ -371,9 +439,12 @@ class EchoDialog(QDialog):
             # set the count of the displayed messages on receiving the first message
             self._update_max_msg_count(txt)
             self.display.append(txt)
+            if msg_cated:
+                txt = '<pre style="color:red; font-family:Fixedsys,Courier,monospace; padding:10px;">message has been cut off</pre>'
+                self.display.append(txt)
         self._print_status()
 
-    def _count_messages(self, ts=time.time()):
+    def _count_messages(self, ts=time.time(), msg_len=-1):
         '''
         Counts the received messages. Call this method only on receive message.
         '''
@@ -384,12 +455,17 @@ class EchoDialog(QDialog):
                 self.msg_t0 = current_time
                 self.msg_tn = current_time
                 self.times = []
+                self.bytes = []
             else:
                 self.times.append(current_time - self.msg_tn)
+                if msg_len > -1:
+                    self.bytes.append(msg_len)
                 self.msg_tn = current_time
             # keep only statistics for the last 5000 messages so as not to run out of memory
             if len(self.times) > self.STATISTIC_QUEUE_LEN:
                 self.times.pop(0)
+            if len(self.bytes) > self.STATISTIC_QUEUE_LEN:
+                self.bytes.pop(0)
             self.message_count += 1
 
     def _trim_width(self, msg):
@@ -422,30 +498,77 @@ class EchoDialog(QDialog):
         if rospy.is_shutdown():
             self.close()
             return
+        if not self.show_only_rate and time.time() - self._last_received_ts > 1:
+            # create a notification about scrapped messages
+            if self._scrapped_msgs_sl > 0:
+                txt = '<pre style="color:red; font-family:Fixedsys,Courier,monospace; padding:10px;">scrapped %s message because of Hz-settings</pre>' % self._scrapped_msgs_sl
+                self._scrapped_msgs_sl = 0
+                self.display.append(txt)
         if self.message_count == self.last_printed_count:
             return
         with self.lock:
+            message_rate = ''
+            message_bytes = ''
+            message_jitter = ''
+            message_window = ''
+            message_std_dev = ''
+            message_scrapped = ''
+            sum_times = sum(self.times)
+            if sum_times == 0:
+                sum_times = 1
+            if (self.SHOW_BYTES or self.show_only_rate) and self.bytes:
+                sum_bytes = sum(self.bytes)
+                avg = sum_bytes / len(self.bytes)
+                last = self.bytes[-1]
+                if avg != last:
+                    message_bytes = "size[ last: %s, avg: %s ]" % (self._normilize_size_print(last), self._normilize_size_print(avg))
+                else:
+                    message_bytes = "size: %s" % (self._normilize_size_print(last))
+                byte_rate = float(sum_bytes) / float(sum_times)
+                message_bytes += " bw: %s" % (self._normilize_size_print(byte_rate))
             # the code from ROS rostopic
             n = len(self.times)
             if n < 2:
                 return
-            mean = sum(self.times) / n
+            mean = sum_times / n
             rate = 1. / mean if mean > 0. else 0
-            # std dev
-            std_dev = math.sqrt(sum((x - mean) ** 2 for x in self.times) / n)
+            message_rate = "average rate: %.3f" % rate
             # min and max
-            max_delta = max(self.times)
-            min_delta = min(self.times)
+            if self.SHOW_JITTER or self.show_only_rate:
+                max_delta = max(self.times)
+                min_delta = min(self.times)
+                message_jitter = "jitter[ min: %.3fs   max: %.3fs ]" % (min_delta, max_delta)
+            # std dev
             self.last_printed_count = self.message_count
-            self._rate_message = "average rate: %.3f\tmin: %.3fs   max: %.3fs   std dev: %.5fs   window: %s" % (rate, min_delta, max_delta, std_dev, n + 1)
+            if self.SHOW_STD_DEV or self.show_only_rate:
+                std_dev = math.sqrt(sum((x - mean) ** 2 for x in self.times) / n)
+                message_std_dev = "std dev: %.5fs" % (std_dev)
+            if self.SHOW_WINDOW_SIZE or self.show_only_rate:
+                message_window = "window: %s" % (n + 1)
             if self._scrapped_msgs > 0:
-                self._rate_message += " --- scrapped msgs: %s" % self._scrapped_msgs
+                message_scrapped += "scrapped msgs: %s" % self._scrapped_msgs
+            self._state_message = ''
+            for msg in [message_rate, message_jitter, message_bytes, message_std_dev, message_window, message_scrapped]:
+                if msg:
+                    if self._state_message:
+                        self._state_message += '    '
+                    self._state_message += msg
             self._print_status()
             if self.show_only_rate:
-                self.display.append(self._rate_message)
+                self.display.append(self._state_message)
+
+    def _normilize_size_print(self, size):
+        if size > 999999:
+            return "%.2fMB" % (size / 1048576.0)
+        if size > 999:
+            return "%.2fKB" % (size / 1024.0)
+        return "%dB" % size
 
     def _print_status(self):
-        self.status_label.setText('%s messages   %s' % (self.message_count, self._rate_message))
+        text = '%s messages    %s' % (self.message_count, self._state_message)
+        if self._latched:
+            text = "[latched] %s" % text
+        self.status_label.setText(text)
 
     def _append_text(self, text):
         '''
