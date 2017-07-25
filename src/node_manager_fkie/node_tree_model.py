@@ -699,7 +699,7 @@ class HostItem(GroupItem):
     @property
     def mastername(self):
         result = nm.nameres().mastername(self._masteruri, self._host)
-        if not result:
+        if result is None or not result:
             result = self.hostname
         return result
 
@@ -759,7 +759,8 @@ class HostItem(GroupItem):
         tooltip += '<p>'
         tooltip += '<a href="show-all-screens://%s">show all screens</a>' % (str(self.masteruri).replace('http://', ''))
         tooltip += '<p>'
-#    if not nm.is_local(self.address):
+        tooltip += '<a href="rosclean://%s" title="calls `rosclean purge` at `%s`">rosclean purge</a>' % (self.hostname, self.hostname)
+        tooltip += '<p>'
         tooltip += '<a href="poweroff://%s" title="calls `sudo poweroff` at `%s` via SSH">poweroff `%s`</a>' % (self.hostname, self.hostname, self.hostname)
         tooltip += '<p>'
         tooltip += '<a href="remove-all-launch-server://%s">kill all launch server</a>' % str(self.masteruri).replace('http://', '')
@@ -849,6 +850,8 @@ class NodeItem(QStandardItem):
 #                  'default_cfg' : QIcon(':/icons/default_cfg.png')
 #                  }
         self._cfgs = []
+        self.launched_cfg = None  # is used to store the last configuration to launch the node
+        self.next_start_cfg = None  # is used to set the configuration for next start of the node
         self._std_config = None  # it's config with empty name. for default proposals
         self._is_ghost = False
         self._has_running = False
