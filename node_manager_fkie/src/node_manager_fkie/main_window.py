@@ -50,7 +50,7 @@ from master_discovery_fkie.common import get_hostname, resolve_url, subdomain
 import node_manager_fkie as nm
 
 from .capability_table import CapabilityTable
-from .common import masteruri_from_ros, package_name, remove_ampersand
+from .common import masteruri_from_ros, package_name, to_url
 from .detailed_msg_box import WarningMessageBox
 from .discovery_listener import MasterListService, MasterStateTopic, MasterStatisticTopic, OwnMasterMonitoring
 from .editor import Editor
@@ -62,6 +62,7 @@ from .master_view_proxy import MasterViewProxy
 from .menu_rqt import MenuRqt
 from .network_discovery_dialog import NetworkDiscoveryDialog
 from .parameter_dialog import ParameterDialog
+from .profile_widget import ProfileWidget
 from .progress_queue import ProgressQueue  # , ProgressThread
 from .screen_handler import ScreenHandler
 from .select_dialog import SelectDialog
@@ -110,6 +111,7 @@ class MainWindow(QMainWindow):
         '''
         QMainWindow.__init__(self)
         self.default_load_launch = os.path.abspath(resolve_url(files[0])) if files else ''
+        self.default_profile_load = os.path.isfile(self.default_load_launch) and self.default_load_launch.endswith('.nmprofile')
         restricted_to_one_master = False
         self._finished = False
         self._history_selected_robot = ''
@@ -151,6 +153,8 @@ class MainWindow(QMainWindow):
         self._set_custom_colors()
 
         # setup settings widget
+        self.profiler = ProfileWidget(self, self)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.profiler)
         self.settings_dock = SettingsWidget(self)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.settings_dock)
         # setup logger widget
@@ -162,6 +166,7 @@ class MainWindow(QMainWindow):
         # setup the launch files view
         self.launch_dock = LaunchFilesWidget(self)
         self.launch_dock.load_signal.connect(self.on_load_launch_file)
+        self.launch_dock.load_profile_signal.connect(self.profiler.on_load_profile_file)
         self.launch_dock.load_as_default_signal.connect(self.on_load_launch_as_default)
         self.launch_dock.edit_signal.connect(self.on_launch_edit)
         self.launch_dock.transfer_signal.connect(self.on_launch_transfer)
@@ -185,8 +190,8 @@ class MainWindow(QMainWindow):
         self.tabLayout.addLayout(self.stackedLayout)
 
         # initialize the progress queue
-        self._progress_queue = ProgressQueue(self.progressFrame, self.progressBar, self.progressCancelButton)
-        self._progress_queue_sync = ProgressQueue(self.progressFrame_sync, self.progressBar_sync, self.progressCancelButton_sync)
+        self._progress_queue = ProgressQueue(self.progressFrame, self.progressBar, self.progressCancelButton, 'Network')
+        self._progress_queue_sync = ProgressQueue(self.progressFrame_sync, self.progressBar_sync, self.progressCancelButton_sync, 'Sync')
 
         # initialize the view for the discovered ROS master
         self.master_model = MasterModel(self.getMasteruri())
@@ -408,8 +413,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         # ask to close nodes on exit
         if self._close_on_exit and nm.settings().confirm_exit_when_closing:
+            masters = [uri for uri, m in self.masters.items() if m.online]
             res = SelectDialog.getValue('Stop nodes?', "Select masters where to stop:",
-                                        self.masters.keys(), False, False, '', self,
+                                        masters, False, False, '', self,
                                         select_if_single=False,
                                         checkitem1="don't show this dialog again")
             masters2stop, self._close_on_exit = res[0], res[1]
@@ -483,6 +489,8 @@ class MainWindow(QMainWindow):
             self._finished = True
             print "Mainwindow finish..."
             self._stop_updating()
+            for _, editor in self.editor_dialogs.items():
+                editor.close()
             for _, master in self.masters.iteritems():
                 master.stop()
             print "Mainwindow finished!"
@@ -500,6 +508,10 @@ class MainWindow(QMainWindow):
             _, _, self.materuri = master.getUri(rospy.get_name())  # _:=code, message
             nm.is_local(get_hostname(self.materuri))
         return self.materuri
+
+    def setMasterOnline(self, masteruri, online=True):
+        if masteruri in self.masters:
+            self.masters[masteruri].online = online
 
     def removeMaster(self, masteruri):
         '''
@@ -519,6 +531,7 @@ class MainWindow(QMainWindow):
             self.masters[masteruri].request_xml_editor.disconnect()
             self.masters[masteruri].stop_nodes_signal.disconnect()
             self.masters[masteruri].robot_icon_updated.disconnect()
+            self.masters[masteruri].save_profile_signal.disconnect()
             if DIAGNOSTICS_AVAILABLE:
                 self.diagnostics_signal.disconnect(self.masters[masteruri].append_diagnostic)
             self.stackedLayout.removeWidget(self.masters[masteruri])
@@ -546,6 +559,7 @@ class MainWindow(QMainWindow):
             self.masters[masteruri].request_xml_editor.connect(self.on_launch_edit)
             self.masters[masteruri].stop_nodes_signal.connect(self.on_stop_nodes)
             self.masters[masteruri].robot_icon_updated.connect(self._on_robot_icon_changed)
+            self.masters[masteruri].save_profile_signal.connect(self.profiler.on_save_profile)
             if DIAGNOSTICS_AVAILABLE:
                 self.diagnostics_signal.connect(self.masters[masteruri].append_diagnostic)
             self.stackedLayout.addWidget(self.masters[masteruri])
@@ -553,21 +567,22 @@ class MainWindow(QMainWindow):
                 if self.default_load_launch:
                     try:
                         if os.path.isfile(self.default_load_launch):
-                            args = list()
-                            args.append('_package:=%s' % (package_name(os.path.dirname(self.default_load_launch))[0]))
-                            args.append('_launch_file:="%s"' % os.path.basename(self.default_load_launch))
-                            host = '%s' % nm.nameres().address(masteruri)
-                            node_name = roslib.names.SEP.join(['%s' % (nm.nameres().masteruri2name(masteruri)),
-                                                               os.path.basename(self.default_load_launch).replace('.launch', ''),
-                                                               'default_cfg'])
-                            self.launch_dock.progress_queue.add2queue('%s' % uuid.uuid4(),
-                                                                      'start default config @%s' % host,
-                                                                      nm.starter().runNodeWithoutConfig,
-                                                                      ('%s' % (nm.nameres().mastername(masteruri)), 'default_cfg_fkie',
-                                                                       'default_cfg', node_name,
-                                                                       args, masteruri, False,
-                                                                       self.masters[masteruri].current_user))
-                            self.launch_dock.progress_queue.start()
+                            if self.default_load_launch.endswith('.launch'):
+                                args = list()
+                                args.append('_package:=%s' % (package_name(os.path.dirname(self.default_load_launch))[0]))
+                                args.append('_launch_file:="%s"' % os.path.basename(self.default_load_launch))
+                                host = '%s' % nm.nameres().address(masteruri)
+                                node_name = roslib.names.SEP.join(['%s' % (nm.nameres().masteruri2name(masteruri)),
+                                                                   os.path.basename(self.default_load_launch).replace('.launch', ''),
+                                                                   'default_cfg'])
+                                self.launch_dock.progress_queue.add2queue('%s' % uuid.uuid4(),
+                                                                          'start default config @%s' % host,
+                                                                          nm.starter().runNodeWithoutConfig,
+                                                                          ('%s' % (nm.nameres().mastername(masteruri)), 'default_cfg_fkie',
+                                                                           'default_cfg', node_name,
+                                                                           args, masteruri, False,
+                                                                           self.masters[masteruri].current_user))
+                                self.launch_dock.progress_queue.start()
                     except Exception as e:
                         WarningMessageBox(QMessageBox.Warning, "Load default configuration",
                                           'Load default configuration %s failed!' % self.default_load_launch,
@@ -637,7 +652,7 @@ class MainWindow(QMainWindow):
                     else:
                         if master.master_state is not None:
                             self.master_model.removeMaster(master.master_state.name)
-                        self.removeMaster(uri)
+                        #self.removeMaster(uri)
             else:
                 try:
                     # determine the ROS network ID
@@ -710,7 +725,8 @@ class MainWindow(QMainWindow):
                 if not (nm.is_local(get_hostname(uri)) or uri == self.getMasteruri()):
                     if master.master_state is not None:
                         self.master_model.removeMaster(master.master_state.name)
-                    self.removeMaster(uri)
+                    self.setMasterOnline(uri, False)
+                    # self.removeMaster(uri)
         # add or update master
         for m in master_list:
             if m.uri is not None:
@@ -719,6 +735,7 @@ class MainWindow(QMainWindow):
                 m.name = nm.nameres().mastername(m.uri)
                 master = self.getMaster(m.uri)
                 master.master_state = m
+                master.online = True
                 master.force_next_update()
                 self._assigne_icon(m.name)
                 self.master_model.updateMaster(m)
@@ -771,7 +788,8 @@ class MainWindow(QMainWindow):
             else:
                 nm.nameres().remove_master_entry(msg.master.uri)
                 self.master_model.removeMaster(msg.master.name)
-                self.removeMaster(msg.master.uri)
+                self.setMasterOnline(msg.master.uri, False)
+#                self.removeMaster(msg.master.uri)
         # start master_sync, if it was selected in the start dialog to start with master_dsicovery
         if self._syncs_to_start:
             if msg.state in [MasterState.STATE_NEW, MasterState.STATE_CHANGED]:
@@ -826,6 +844,8 @@ class MainWindow(QMainWindow):
         if minfo.masteruri in self.masters:
             for _, master in self.masters.items():  # _:=uri
                 try:
+                    if not master.online and master.masteruri != minfo.masteruri:
+                        continue
                     # check for running discovery service
                     new_info = master.master_info is None or master.master_info.timestamp < minfo.timestamp
 #          cputimes = os.times()
@@ -849,6 +869,9 @@ class MainWindow(QMainWindow):
                         # update the list view, whether master is synchronized or not
                         if master.master_info.masteruri == minfo.masteruri:
                             self.master_model.setChecked(master.master_state.name, not minfo.getNodeEndsWith('master_sync') is None)
+                            if self.default_profile_load:
+                                self.default_profile_load = False
+                                QTimer.singleShot(2000, self._load_default_profile_slot)
                     self.capabilitiesTable.updateState(minfo.masteruri, minfo)
                 except Exception, e:
                     rospy.logwarn("Error while process received master info from %s: %s", minfo.masteruri, str(e))
@@ -860,9 +883,14 @@ class MainWindow(QMainWindow):
                 self.syncButton.setChecked(not self.currentMaster.master_info.getNodeEndsWith('master_sync') is None)
         else:
             self.masterlist_service.retrieveMasterList(minfo.masteruri, False)
+        self.profiler.update_progress()
 #    cputimes_m = os.times()
 #    cputime_m = cputimes_m[0] + cputimes_m[1] - cputime_init_m
 #    print "ALL:", cputime_m
+
+    def _load_default_profile_slot(self):
+        if not hasattr(self, "_on_finish"):
+            self.profiler.on_load_profile_file(self.default_load_launch)
 
     def on_master_errors_retrieved(self, masteruri, error_list):
         self.master_model.updateMasterErrors(nm.nameres().mastername(masteruri), error_list)
@@ -1009,7 +1037,7 @@ class MainWindow(QMainWindow):
                 elif time_dialog.ntpdateRadioButton.isChecked():
                     ntp_host = time_dialog.hostsComboBox.currentText()
                     nm.history().addParamCache('/ntp', ntp_host)
-                    cmd = "%s %s" % (remove_ampersand(time_dialog.ntpdateRadioButton.text()), ntp_host)
+                    cmd = "%s %s" % ('sudo ntpdate -v -u -t 1', ntp_host)
                     nm.starter().ntpdate(host, cmd)
 
     def on_refresh_master_clicked(self):
@@ -1540,14 +1568,14 @@ class MainWindow(QMainWindow):
                                                 QMessageBox.Ok | QMessageBox.Cancel)
                 if ret == QMessageBox.Cancel:
                     return
-            masteruris = nm.nameres().masterurisbyaddr(host)
-            for masteruri in masteruris:
-                master = self.getMaster(masteruri)
-                master.stop_nodes_by_name(['/master_discovery'])
             self._progress_queue.add2queue(str(uuid.uuid4()),
                                            'poweroff `%s`' % host,
                                            nm.starter().poweroff,
                                            ('%s' % host,))
+            masteruris = nm.nameres().masterurisbyaddr(host)
+            for masteruri in masteruris:
+                master = self.getMaster(masteruri)
+                master.stop_nodes_by_name(['/master_discovery'])
             self._progress_queue.start()
             self.on_description_update('Description', '')
             self.launch_dock.raise_()
@@ -1557,21 +1585,47 @@ class MainWindow(QMainWindow):
                               'Error while poweroff %s' % host,
                               '%s' % e).exec_()
 
+    def rosclean(self, host):
+        try:
+            ret = QMessageBox.warning(self, "ROS Node Manager",
+                                            "Do you really want delete all logs on `%s`?" % host,
+                                            QMessageBox.Ok | QMessageBox.Cancel)
+            if ret == QMessageBox.Cancel:
+                return
+            self._progress_queue.add2queue(str(uuid.uuid4()),
+                                           'rosclean `%s`' % host,
+                                           nm.starter().rosclean,
+                                           ('%s' % host,))
+            self._progress_queue.start()
+            self.launch_dock.raise_()
+        except (Exception, nm.StartException), e:
+            rospy.logwarn("Error while rosclean %s: %s", host, str(e))
+            WarningMessageBox(QMessageBox.Warning, "Run error",
+                              'Error while rosclean %s' % host,
+                              '%s' % e).exec_()
+
 # ======================================================================================================================
 # Handling of the launch view signals
 # ======================================================================================================================
 
-    def on_load_launch_file(self, path):
+    def on_load_launch_file(self, path, argv=[], masteruri=None):
         '''
         Load the launch file. A ROS master must be selected first.
         :param path: the path of the launch file.
         :type path: str
         '''
-        rospy.loginfo("LOAD launch: %s" % path)
-        master_proxy = self.stackedLayout.currentWidget()
+        if argv:
+            rospy.loginfo("LOAD launch: %s with args: %s" % (path, argv))
+        else:
+            rospy.loginfo("LOAD launch: %s" % path)
+        master_proxy = None
+        if masteruri is not None:
+            master_proxy = self.getMaster(masteruri, False)
+        if master_proxy is None:
+            master_proxy = self.stackedLayout.currentWidget()
         if isinstance(master_proxy, MasterViewProxy):
             try:
-                master_proxy.launchfiles = path
+                master_proxy.launchfiles = (path, argv)
             except Exception, e:
                 import traceback
                 print traceback.format_exc(1)
@@ -1580,6 +1634,23 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Load of launch file",
                                           "Select a master first!",)
+
+    def on_load_launch_as_default_bypkg(self, pkg, launch_file, master_proxy, args=[], host=None):
+        argv = list(args)
+        argv.append('_package:=%s' % pkg)
+        argv.append('_launch_file:="%s"' % launch_file)
+        hostname = host if host else nm.nameres().address(master_proxy.masteruri)
+        name_file_prefix = launch_file.replace('.launch', '').replace(' ', '_')
+        node_name = roslib.names.SEP.join(['%s' % nm.nameres().masteruri2name(master_proxy.masteruri),
+                                           name_file_prefix,
+                                           'default_cfg'])
+        self.launch_dock.progress_queue.add2queue('%s' % uuid.uuid4(),
+                                                  'start default config %s' % hostname,
+                                                  nm.starter().runNodeWithoutConfig,
+                                                  ('%s' % hostname, 'default_cfg_fkie', 'default_cfg',
+                                                   node_name, argv, master_proxy.masteruri, False,
+                                                   master_proxy.current_user))
+        self.launch_dock.progress_queue.start()
 
     def on_load_launch_as_default(self, path, host=None):
         '''
@@ -1655,7 +1726,7 @@ class MainWindow(QMainWindow):
                     del self.editor_dialogs[path]
                     self.on_launch_edit(files, search_text, 2)
             else:
-                editor = Editor(files, search_text, self)
+                editor = Editor(files, search_text)
                 self.editor_dialogs[path] = editor
                 editor.finished_signal.connect(self._editor_dialog_closed)
                 editor.show()
@@ -1881,7 +1952,7 @@ class MainWindow(QMainWindow):
     def on_start_nodes(self, masteruri, cfg, nodes):
         if masteruri is not None:
             master = self.getMaster(masteruri)
-            master.start_nodes_by_name(nodes, (cfg, ''))
+            master.start_nodes_by_name(nodes, roslib.names.ns_join(cfg, 'run'))
 
     def on_stop_nodes(self, masteruri, nodes):
         if masteruri is not None:
@@ -1908,13 +1979,13 @@ class MainWindow(QMainWindow):
     def on_description_anchorClicked(self, url):
         self._accept_next_update = True
         if url.toString().startswith('open-sync-dialog://'):
-            self.on_sync_dialog_released(False, self._url_path(url).replace('open-sync-dialog', 'http'), True)
+            self.on_sync_dialog_released(False, url.toString().replace('open-sync-dialog', 'http'), True)
         elif url.toString().startswith('show-all-screens://'):
-            master = self.getMaster(self._url_path(url).replace('show-all-screens', 'http'), False)
+            master = self.getMaster(url.toString().replace('show-all-screens', 'http'), False)
             if master is not None:
                 master.on_show_all_screens()
         elif url.toString().startswith('remove-all-launch-server://'):
-            master = self.getMaster(self._url_path(url).replace('remove-all-launch-server', 'http'), False)
+            master = self.getMaster(url.toString().replace('remove-all-launch-server', 'http'), False)
             if master is not None:
                 master.on_remove_all_launch_server()
         elif url.toString().startswith('node://'):
@@ -1977,6 +2048,8 @@ class MainWindow(QMainWindow):
             self._reload_globals_at_next_start(self._url_path(url).replace('reload-globals://', ''))
         elif url.toString().startswith('poweroff://'):
             self.poweroff_host(self._url_host(url))
+        elif url.toString().startswith('rosclean://'):
+            self.rosclean(self._url_host(url))
         else:
             QDesktopServices.openUrl(url)
             self._accept_next_update = False
