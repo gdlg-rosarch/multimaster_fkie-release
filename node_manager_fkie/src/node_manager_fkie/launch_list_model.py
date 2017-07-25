@@ -55,12 +55,14 @@ class LaunchItem(QStandardItem):
 
     NOT_FOUND = -1
     NOTHING = 0
-    RECENT_FILE = 1
-    LAUNCH_FILE = 2
-    CFG_FILE = 3
-    FOLDER = 10
-    PACKAGE = 11
-    STACK = 12
+    PROFILE = 5
+    RECENT_PROFILE = 6
+    RECENT_FILE = 10
+    LAUNCH_FILE = 11
+    CFG_FILE = 12
+    FOLDER = 20
+    PACKAGE = 21
+    STACK = 22
 
     def __init__(self, name, path, lid, parent=None):
         '''
@@ -84,6 +86,10 @@ class LaunchItem(QStandardItem):
             self.setIcon(QIcon(":/icons/crystal_clear_launch_file_recent.png"))
         elif self.id == LaunchItem.STACK:
             self.setIcon(QIcon(":/icons/crystal_clear_stack.png"))
+        elif self.id == LaunchItem.PROFILE:
+            self.setIcon(QIcon(":/icons/crystal_clear_profile.png"))
+        elif self.id == LaunchItem.RECENT_PROFILE:
+            self.setIcon(QIcon(":/icons/crystal_clear_profile_recent.png"))
 
 #  def __del__(self):
 #    print "delete LAUNCH", self.name
@@ -100,14 +106,14 @@ class LaunchItem(QStandardItem):
         '''
         if role == Qt.DisplayRole:
             # return the displayed item name
-            if self.id == LaunchItem.RECENT_FILE:
+            if self.id == LaunchItem.RECENT_FILE or self.id == LaunchItem.RECENT_PROFILE:
                 return "%s   [%s]" % (self.name, self.package_name)  # .decode(sys.getfilesystemencoding())
             else:
                 return "%s" % self.name
         elif role == Qt.ToolTipRole:
             # return the tooltip of the item
             result = "%s" % self.path
-            if self.id == LaunchItem.RECENT_FILE:
+            if self.id == LaunchItem.RECENT_FILE or self.id == LaunchItem.RECENT_PROFILE:
                 result = "%s\nPress 'Delete' to remove the entry from the history list" % self.path
             return result
 #     elif role == Qt.DecorationRole:
@@ -125,10 +131,13 @@ class LaunchItem(QStandardItem):
     def setData(self, value, role=Qt.EditRole):
         if role == Qt.EditRole:
             # rename the file or folder
-            if self.name != value and self.id in [self.RECENT_FILE, self.LAUNCH_FILE, self.CFG_FILE, self.FOLDER]:
+            if self.name != value and self.id in [self.RECENT_FILE, self.LAUNCH_FILE, self.RECENT_PROFILE, self.PROFILE, self.CFG_FILE, self.FOLDER]:
                 new_path = os.path.join(os.path.dirname(self.path), value)
                 if not os.path.exists(new_path):
                     os.rename(self.path, new_path)
+                    if self.name != value and self.id in [self.RECENT_FILE, self.RECENT_PROFILE]:
+                        # update in history
+                        nm.settings().launch_history_add(new_path, replace=self.path)
                     self.name = value
                     self.path = new_path
                 else:
@@ -167,6 +176,13 @@ class LaunchItem(QStandardItem):
         '''
         return self.id == self.CFG_FILE
 
+    def isProfileFile(self):
+        '''
+        @return: C{True} if it is a node_manager profile file
+        @rtype: C{boolean}
+        '''
+        return self.path is not None and os.path.isfile(self.path) and self.path.endswith('.nmprofile')
+
 
 class LaunchListModel(QStandardItemModel):
     '''
@@ -186,14 +202,13 @@ class LaunchListModel(QStandardItemModel):
         self.items = []
         self.DIR_CACHE = {}
         self.currentPath = None
-        self.load_history = self._getLoadHistory()
         self.root_paths = [os.path.normpath(p) for p in os.getenv("ROS_PACKAGE_PATH").split(':')]
         self._setNewList(self._moveUp(None))
         self.__packages = {}
         self._fill_packages_thread = PackagesThread()
 
     def _getRootItems(self):
-        result = list(self.load_history)
+        result = list(nm.settings().launch_history)
         result.extend(self.root_paths)
         return result
 
@@ -217,7 +232,7 @@ class LaunchListModel(QStandardItemModel):
         try:
             item = self.itemFromIndex(index)
             result = Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsDragEnabled
-            if item.id in [LaunchItem.RECENT_FILE, LaunchItem.LAUNCH_FILE, LaunchItem.CFG_FILE, LaunchItem.FOLDER]:
+            if item.id in [LaunchItem.RECENT_FILE, LaunchItem.RECENT_PROFILE, LaunchItem.LAUNCH_FILE, LaunchItem.CFG_FILE, LaunchItem.FOLDER, LaunchItem.PROFILE]:
                 result = result | Qt.ItemIsEditable | Qt.ItemIsDragEnabled
             return result
         except:
@@ -314,28 +329,6 @@ class LaunchListModel(QStandardItemModel):
         '''
 #    if self._is_in_ros_packages(path):
         self._setNewList(self._moveDown(path))
-
-    def add2LoadHistory(self, launch_file):
-        try:
-            self.load_history.remove(launch_file)
-        except:
-            pass
-        self.load_history.append(launch_file)
-        try:
-            while len(self.load_history) > nm.settings().launch_history_length:
-                self.load_history.pop(0)
-        except:
-            pass
-        self._storeLoadHistory(self.load_history)
-#    self.reloadCurrentPath() # todo: keep the item selected in list view after the reload the path
-
-    def removeFromLoadHistory(self, launch_file):
-        try:
-            self.load_history.remove(launch_file)
-        except:
-            pass
-        self._storeLoadHistory(self.load_history)
-#    self.reloadCurrentPath() # todo: keep the item selected in list view after the reload the path
 
     def show_packages(self, show):
         if show:
@@ -441,7 +434,7 @@ class LaunchListModel(QStandardItemModel):
             try:
                 for i in range(root.rowCount()):
                     launchItem = root.child(i)
-                    launch_file_cmp = (path_id in [LaunchItem.RECENT_FILE, LaunchItem.LAUNCH_FILE] and item < launchItem.name)
+                    launch_file_cmp = (path_id in [LaunchItem.RECENT_FILE, LaunchItem.LAUNCH_FILE, LaunchItem.RECENT_PROFILE, LaunchItem.PROFILE] and item < launchItem.name)
                     launch_id_cmp = (launchItem.id > path_id and launchItem.id > LaunchItem.LAUNCH_FILE)
                     launch_name_cmp = (launchItem.id == path_id and item < launchItem.name)
                     if launch_file_cmp or launch_id_cmp or launch_name_cmp:
@@ -465,17 +458,26 @@ class LaunchListModel(QStandardItemModel):
         @rtype: C{constants of LaunchItem}
         '''
         if path in self.DIR_CACHE:
-            if path in self.load_history:
+            if path in nm.settings().launch_history:
+                if path.endswith('.nmprofile'):
+                    return LaunchItem.RECENT_PROFILE
                 return LaunchItem.RECENT_FILE
             return self.DIR_CACHE[path]
         if os.path.basename(path)[0] != '.':
-            if path in self.load_history:
-                self.DIR_CACHE[path] = LaunchItem.RECENT_FILE
-                return LaunchItem.RECENT_FILE
+            if path in nm.settings().launch_history:
+                if path.endswith('.nmprofile'):
+                    self.DIR_CACHE[path] = LaunchItem.RECENT_PROFILE
+                    return LaunchItem.RECENT_PROFILE
+                else:
+                    self.DIR_CACHE[path] = LaunchItem.RECENT_FILE
+                    return LaunchItem.RECENT_FILE
             elif os.path.isfile(path):
                 if (path.endswith('.launch')):
                     self.DIR_CACHE[path] = LaunchItem.LAUNCH_FILE
                     return LaunchItem.LAUNCH_FILE
+                elif (path.endswith('.nmprofile')):
+                    self.DIR_CACHE[path] = LaunchItem.PROFILE
+                    return LaunchItem.PROFILE
                 else:
                     for e in nm.settings().launch_view_file_ext:
                         if path.endswith(e):
@@ -564,35 +566,3 @@ class LaunchListModel(QStandardItemModel):
         else:
             self.currentPath = None
         return path, result_list
-
-    def _getLoadHistory(self):
-        '''
-        Read the history of the recently loaded files from the file stored in ROS_HOME path.
-        @return: the list with file names
-        @rtype: C{[str]}
-        '''
-        result = list()
-        historyFile = nm.settings().qsettings(nm.settings().LAUNCH_HISTORY_FILE)
-        size = historyFile.beginReadArray("launch_history")
-        for i in range(size):
-            historyFile.setArrayIndex(i)
-            if i >= nm.settings().launch_history_length:
-                break
-            launch_file = historyFile.value("file")
-            if os.path.isfile(launch_file):
-                result.append(launch_file)
-        historyFile.endArray()
-        return result
-
-    def _storeLoadHistory(self, files):
-        '''
-        Saves the list of recently loaded files to history. The existing history will be replaced!
-        @param files: the list with filenames
-        @type files: C{[str]}
-        '''
-        historyFile = nm.settings().qsettings(nm.settings().LAUNCH_HISTORY_FILE)
-        historyFile.beginWriteArray("launch_history")
-        for i, launch_file in enumerate(files):
-            historyFile.setArrayIndex(i)
-            historyFile.setValue("file", launch_file)
-        historyFile.endArray()
