@@ -1,4 +1,5 @@
 import os
+import rospy
 
 MANIFEST_FILE = 'manifest.xml'
 PACKAGE_FILE = 'package.xml'
@@ -10,20 +11,6 @@ except ImportError:
     CATKIN_SUPPORTED = False
 
 PACKAGE_CACHE = {}
-
-
-def remove_ampersand(text):
-    '''
-    Removes ampersand (&) from given text. The ampersand is automatically set
-    in QPushButton or QCheckbx by KDEPlatformTheme plugin in Qt5.
-    https://bugs.kde.org/show_bug.cgi?id=337491
-    A workaroud is to add
-    [Development]
-    AutoCheckAccelerators=false
-    to ~/.config/kdeglobals
-    Or remove it manually.
-    '''
-    return text.replace('&', '')
 
 
 def get_ros_home():
@@ -65,6 +52,24 @@ def masteruri_from_ros():
         return os.environ['ROS_MASTER_URI']
 
 
+def get_rosparam(param, masteruri):
+    if masteruri:
+        try:
+            master = rospy.msproxy.MasterProxy(masteruri)
+            return master[param]  # MasterProxy does all the magic for us
+        except KeyError:
+            return {}
+
+
+def delete_rosparam(param, masteruri):
+    if masteruri:
+        try:
+            master = rospy.msproxy.MasterProxy(masteruri)
+            del master[param]  # MasterProxy does all the magic for us
+        except Exception:
+            pass
+
+
 def get_packages(path):
     result = {}
     if os.path.isdir(path):
@@ -104,6 +109,17 @@ def resolve_paths(text):
                 import roslib
                 pkg = roslib.packages.get_pkg_dir(script[1])
             return result.replace(text[startIndex: endIndex + 1], pkg)
+    return result
+
+
+def to_url(path):
+    '''
+    Searches the package name for given path and create an URL starting with pkg://
+    '''
+    result = path
+    pkg, pth = package_name(os.path.dirname(path))
+    if pkg is not None:
+        result = "pkg://%s%s" % (pkg, path.replace(pth, ''))
     return result
 
 
