@@ -394,9 +394,10 @@ class StartHandler(object):
             # multi-call objects are not reusable
             socket.setdefaulttimeout(6 + len(params))
             param_server_multi = xmlrpclib.MultiCall(param_server)
+            address = nm.nameres().address(masteruri)
             for p in params.itervalues():
                 # suppressing this as it causes too much spam
-                value, is_abs_path, found, package = cls._resolve_abs_paths(p.value, nm.nameres().address(masteruri), user, pw, auto_pw_request)
+                value, is_abs_path, found, package = cls._resolve_abs_paths(p.value, address, user, pw, auto_pw_request)
                 if is_abs_path:
                     abs_paths.append((p.key, p.value, value))
                     if not found and package:
@@ -898,6 +899,31 @@ class StartHandler(object):
             # kill on a remote machine
             cmd = ['sudo poweroff']
             _ = nm.ssh().ssh_x11_exec(host, cmd, 'Shutdown %s' % host, user)
+
+    def rosclean(self, host, auto_pw_request=False, user=None, pw=None):
+        '''
+        rosclean purge on given host.
+        @param host: the name or address of the host, where rosclean is called.
+        @type host: C{str}
+        @raise StartException: on error
+        @raise Exception: on errors while resolving host
+        @see: L{node_manager_fkie.is_local()}
+        '''
+        try:
+            self._rosclean_wo(host, auto_pw_request, user, pw)
+        except nm.AuthenticationRequest as e:
+            raise nm.InteractionNeededError(e, self.poweroff, (host, auto_pw_request))
+
+    def _rosclean_wo(self, host, auto_pw_request=False, user=None, pw=None):
+        if nm.is_local(host):
+            rospy.loginfo("rosclean purge on localhost!")
+            cmd = nm.settings().terminal_cmd(['rosclean purge -y'], "rosclean")
+            SupervisedPopen(shlex.split(cmd), object_id="rosclean", description="rosclean")
+        else:
+            rospy.loginfo("rosclean %s", host)
+            # kill on a remote machine
+            cmd = ['rosclean purge -y']
+            _ = nm.ssh().ssh_x11_exec(host, cmd, 'rosclean purge on %s' % host, user)
 
     @classmethod
     def transfer_files(cls, host, path, auto_pw_request=False, user=None, pw=None):
