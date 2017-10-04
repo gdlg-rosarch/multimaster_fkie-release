@@ -33,9 +33,11 @@
 from python_qt_binding.QtCore import QFile, QFileInfo, QIODevice, QRegExp, Qt, Signal
 from python_qt_binding.QtGui import QFont, QTextCursor
 import os
+import re
 
-from node_manager_fkie.common import package_name
-from node_manager_fkie.detailed_msg_box import WarningMessageBox
+from node_manager_fkie.common import package_name, utf8
+from node_manager_fkie.detailed_msg_box import MessageBox
+from node_manager_fkie.launch_config import LaunchConfig
 import node_manager_fkie as nm
 
 from .parser_functions import interpret_path
@@ -44,9 +46,9 @@ from .yaml_highlighter import YamlHighlighter
 
 
 try:
-    from python_qt_binding.QtGui import QApplication, QMenu, QMessageBox, QTextEdit
+    from python_qt_binding.QtGui import QApplication, QMenu, QTextEdit
 except:
-    from python_qt_binding.QtWidgets import QApplication, QMenu, QMessageBox, QTextEdit
+    from python_qt_binding.QtWidgets import QApplication, QMenu, QTextEdit
 
 
 class TextEdit(QTextEdit):
@@ -91,6 +93,7 @@ class TextEdit(QTextEdit):
                             QRegExp("\\bfile\\b"), QRegExp("\\bvalue=.*pkg:\/\/\\b"),
                             QRegExp("\\bvalue=.*package:\/\/\\b"),
                             QRegExp("\\bvalue=.*\$\(find\\b"),
+                            QRegExp("\\bargs=.*\$\(find\\b"),
                             QRegExp("\\bdefault=.*\$\(find\\b")]
         self.filename = filename
         self.file_info = None
@@ -225,15 +228,15 @@ class TextEdit(QTextEdit):
             if self.filename and self.file_info:
                 if self.file_info.lastModified() != QFileInfo(self.filename).lastModified():
                     self.file_info = QFileInfo(self.filename)
-                    result = QMessageBox.question(self, "File changed", "File was changed, reload?", QMessageBox.Yes | QMessageBox.No)
-                    if result == QMessageBox.Yes:
+                    result = MessageBox.question(self, "File changed", "File was changed, reload?", buttons=MessageBox.Yes | MessageBox.No)
+                    if result == MessageBox.Yes:
                         f = QFile(self.filename)
                         if f.open(QIODevice.ReadOnly | QIODevice.Text):
                             self.setText(unicode(f.readAll(), "utf-8"))
                             self.document().setModified(False)
                             self.textChanged.emit()
                         else:
-                            QMessageBox.critical(self, "Error", "Cannot open launch file%s" % self.filename)
+                            MessageBox.critical(self, "Error", "Cannot open launch file%s" % self.filename)
         except:
             pass
         QTextEdit.focusInEvent(self, event)
@@ -245,32 +248,27 @@ class TextEdit(QTextEdit):
         '''
         if event.modifiers() == Qt.ControlModifier or event.modifiers() == Qt.ShiftModifier:
             cursor = self.cursorForPosition(event.pos())
-            index = self.index(cursor.block().text())
-            if index > -1:
-                startIndex = cursor.block().text().find('"', index)
-                if startIndex > -1:
-                    endIndex = cursor.block().text().find('"', startIndex + 1)
-                    fileName = cursor.block().text()[startIndex + 1:endIndex]
-                    if len(fileName) > 0:
-                        try:
-                            qf = QFile(interpret_path(fileName))
-                            if not qf.exists():
-                                # create a new file, if it does not exists
-                                result = QMessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", qf.fileName()]), QMessageBox.Yes | QMessageBox.No)
-                                if result == QMessageBox.Yes:
-                                    d = os.path.dirname(qf.fileName())
-                                    if not os.path.exists(d):
-                                        os.makedirs(d)
-                                    with open(qf.fileName(), 'w') as f:
-                                        if qf.fileName().endswith('.launch'):
-                                            f.write('<launch>\n\n</launch>')
-                                    event.setAccepted(True)
-                                    self.load_request_signal.emit(qf.fileName())
-                            else:
-                                event.setAccepted(True)
-                                self.load_request_signal.emit(qf.fileName())
-                        except Exception, e:
-                            WarningMessageBox(QMessageBox.Warning, "File not found %s" % fileName, str(e)).exec_()
+            inc_files = LaunchConfig.included_files(cursor.block().text(), recursive=False)
+            if inc_files:
+                try:
+                    qf = QFile(inc_files[0])
+                    if not qf.exists():
+                        # create a new file, if it does not exists
+                        result = MessageBox.question(self, "File not found", '\n\n'.join(["Create a new file?", qf.fileName()]), buttons=MessageBox.Yes | MessageBox.No)
+                        if result == MessageBox.Yes:
+                            d = os.path.dirname(qf.fileName())
+                            if not os.path.exists(d):
+                                os.makedirs(d)
+                            with open(qf.fileName(), 'w') as f:
+                                if qf.fileName().endswith('.launch'):
+                                    f.write('<launch>\n\n</launch>')
+                            event.setAccepted(True)
+                            self.load_request_signal.emit(qf.fileName())
+                    else:
+                        event.setAccepted(True)
+                        self.load_request_signal.emit(qf.fileName())
+                except Exception, e:
+                    MessageBox.critical(self, "Error", "File not found %s" % inc_files[0], detailed_text=utf8(e))
         QTextEdit.mouseReleaseEvent(self, event)
 
     def mouseMoveEvent(self, event):
@@ -311,10 +309,15 @@ class TextEdit(QTextEdit):
             # handle the shifting of the block
             if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_Tab:
                 self.shiftText()
-            elif event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Tab:
+            elif event.modifiers() == Qt.ShiftModifier and event.key() == Qt.Key_Backtab:
                 self.shiftText(back=True)
             else:
+                event.accept()
+                if event.key() in [Qt.Key_Enter, Qt.Key_Return]:
+                    ident = self.getIdentOfCurretLine()
                 QTextEdit.keyPressEvent(self, event)
+                if event.key() in [Qt.Key_Enter, Qt.Key_Return]:
+                    self.indentCurrentLine(ident)
         else:
             event.accept()
             QTextEdit.keyPressEvent(self, event)
@@ -331,7 +334,40 @@ class TextEdit(QTextEdit):
             event.accept()
             QTextEdit.keyReleaseEvent(self, event)
 
+    def _has_uncommented(self):
+        cursor = QTextCursor(self.textCursor())
+        if not cursor.isNull():
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            cursor.setPosition(start)
+            block_start = cursor.blockNumber()
+            cursor.setPosition(end)
+            block_end = cursor.blockNumber()
+            if block_end - block_start > 0 and end - cursor.block().position() <= 0:
+                # skip the last block, if no characters are selected
+                block_end -= 1
+            cursor.setPosition(start, QTextCursor.MoveAnchor)
+            cursor.movePosition(QTextCursor.StartOfLine)
+            start = cursor.position()
+            xmlre = re.compile(r"\A\s*<!--")
+            otherre = re.compile(r"\A\s*#")
+            ext = os.path.splitext(self.filename)
+            # XML comment
+            xml_file = ext[1] in self.CONTEXT_FILE_EXT
+            while (cursor.block().blockNumber() < block_end + 1):
+                cursor.movePosition(QTextCursor.StartOfLine)
+                cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                if xml_file:
+                    if not xmlre.match(cursor.selectedText()):
+                        return True
+                else:
+                    if not otherre.match(cursor.selectedText()):
+                        return True
+                cursor.movePosition(QTextCursor.NextBlock)
+        return False
+
     def commentText(self):
+        do_comment = self._has_uncommented()
         cursor = self.textCursor()
         if not cursor.isNull():
             cursor.beginEditBlock()
@@ -347,61 +383,42 @@ class TextEdit(QTextEdit):
             cursor.setPosition(start, QTextCursor.MoveAnchor)
             cursor.movePosition(QTextCursor.StartOfLine)
             start = cursor.position()
+            ext = os.path.splitext(self.filename)
+            # XML comment
+            xml_file = ext[1] in self.CONTEXT_FILE_EXT
             while (cursor.block().blockNumber() < block_end + 1):
                 cursor.movePosition(QTextCursor.StartOfLine)
-                ext = os.path.splitext(self.filename)
                 # XML comment
-                if ext[1] in self.CONTEXT_FILE_EXT:
-                    # skipt the existing spaces at the start of the line
-                    cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                    while cursor.selectedText() in [' ', '\t']:
-                        cursor.setPosition(cursor.position(), QTextCursor.MoveAnchor)
-                        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                    cursor.movePosition(QTextCursor.PreviousCharacter, 1)
-                    cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 4)
-                    # only comments breakers at the start of the line are removed
-                    if cursor.selectedText() == '<!--':
-                        cursor.insertText('')
-                        # remove spaces between comment and text
-                        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                        while cursor.selectedText() in [' ', '\t']:
-                            cursor.insertText('')
-                            cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                        cursor.movePosition(QTextCursor.EndOfLine)
-                        cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor, 3)
-                        if cursor.selectedText() == '-->':
-                            cursor.insertText('')
-                        # remove spaces between comment and text
-                        cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor, 1)
-                        while cursor.selectedText() in [' ', '\t']:
-                            cursor.insertText('')
-                            cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor, 1)
+                if xml_file:
+                    xmlre_start = re.compile(r"<!-- ?")
+                    xmlre_end = re.compile(r" ?-->")
+                    cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                    if do_comment:
+                        cursor.insertText("<!-- %s -->" % cursor.selectedText().replace("--", "- -"))
                     else:
-                        cursor.setPosition(cursor.anchor())
-                        cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
-                        # only comment out, if no comments are found
-                        if cursor.selectedText().find('<!--') < 0 and cursor.selectedText().find('-->') < 0:
-                            cursor.movePosition(QTextCursor.StartOfLine)
-                            # skipt the current existing spaces
-                            cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                            while cursor.selectedText() in [' ', '\t']:
-                                cursor.setPosition(cursor.position(), QTextCursor.MoveAnchor)
-                                cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 1)
-                            cursor.movePosition(QTextCursor.PreviousCharacter, 1)
-                            cursor.insertText('<!-- ')
-                            cursor.movePosition(QTextCursor.EndOfLine)
-                            cursor.insertText(' -->')
+                        res = cursor.selectedText()
+                        mstart = xmlre_start.search(res)
+                        if mstart:
+                            res = res.replace(mstart.group(), "", 1)
+                            res = res.replace("<!- -", "<!--", 1)
+                        mend = xmlre_end.search(res)
+                        if mend:
+                            res = res.replace(mend.group(), "", 1)
+                            last_pos = res.rfind("- ->")
+                            if last_pos > -1:
+                                res = "%s-->" % res[0:last_pos]
+                        cursor.insertText(res)
                 else:  # other comments
-                    if cursor.block().length() < 2:
-                        cursor.movePosition(QTextCursor.NextBlock)
-                        continue
-                    cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, 2)
-                    # only comments breakers at the start of the line are removed
-                    if cursor.selectedText() == '# ':
-                        cursor.insertText('')
-                    else:
-                        cursor.movePosition(QTextCursor.StartOfLine)
+                    hash_re = re.compile(r"# ?")
+                    if do_comment:
                         cursor.insertText('# ')
+                    else:
+                        cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                        res = cursor.selectedText()
+                        hres = hash_re.search(res)
+                        if hres:
+                            res = res.replace(hres.group(), "", 1)
+                        cursor.insertText(res)
                 cursor.movePosition(QTextCursor.NextBlock)
             # Set our cursor's selection to span all of the involved lines.
             cursor.endEditBlock()
@@ -441,8 +458,17 @@ class TextEdit(QTextEdit):
                     cursor.movePosition(QTextCursor.StartOfLine)
                 else:
                     # shift one line two spaces to the right
-                    cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, end - start)
-                    cursor.insertText('  ')
+                    indent_prev = self.getIndentOfPreviewsBlock()
+                    if self.textCursor().positionInBlock() >= indent_prev:
+                        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, end - start)
+                        cursor.insertText('  ')
+                    else:
+                        # move to the position of previous indent
+                        cursor.movePosition(QTextCursor.StartOfLine)
+                        pose_of_line = cursor.position()
+                        cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                        cursor.insertText("%s%s" % (' ' * indent_prev, cursor.selectedText().lstrip()))
+                        cursor.setPosition(pose_of_line + indent_prev, QTextCursor.MoveAnchor)
             else:
                 # shift the selected block two spaces to the left
                 if back:
@@ -477,6 +503,58 @@ class TextEdit(QTextEdit):
                     cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, end - start + inserted)
             self.setTextCursor(cursor)
             cursor.endEditBlock()
+
+    def indentCurrentLine(self, count=0):
+        '''
+        Increase indentation of current line according to the preview line.
+        '''
+        cursor = self.textCursor()
+        if not cursor.isNull():
+            # one undo operation
+            cursor.beginEditBlock()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            cursor.setPosition(start)
+            block_start = cursor.blockNumber()
+            cursor.setPosition(end)
+            block_end = cursor.blockNumber()
+            ident = ''
+            for _ in range(count):
+                ident += ' '
+            if block_end - block_start == 0:
+                # shift one line of count spaces to the right
+                cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, end - start)
+                cursor.insertText(ident)
+            else:
+                # shift selected block two spaces to the right
+                inserted = 0
+                for i in reversed(range(start, end)):
+                    cursor.setPosition(i)
+                    if cursor.atBlockStart():
+                        cursor.insertText(ident)
+                        inserted += count
+                cursor.setPosition(start)
+                cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, end - start + inserted)
+            self.setTextCursor(cursor)
+            cursor.endEditBlock()
+
+    def getIdentOfCurretLine(self):
+        cursor = self.textCursor()
+        if not cursor.isNull():
+            cursor.movePosition(QTextCursor.StartOfLine)
+            cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+            line = cursor.selectedText()
+            return len(line) - len(line.lstrip(' '))
+        return 0
+
+    def getIndentOfPreviewsBlock(self):
+        cursor = self.textCursor()
+        if not cursor.isNull():
+            cursor.movePosition(QTextCursor.PreviousBlock)
+            cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+            line = cursor.selectedText()
+            return len(line) - len(line.lstrip(' '))
+        return 0
 
     #############################################################################
     ########## Drag&Drop                                                   ######
