@@ -30,24 +30,24 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from python_qt_binding.QtCore import QObject, QRegExp, Qt, Signal
-from python_qt_binding.QtGui import QFont, QIcon, QTextCharFormat
+from python_qt_binding.QtCore import QObject, Qt, Signal
+from python_qt_binding.QtGui import QIcon
 import os
 import threading
 
 import rospy
 
-from node_manager_fkie.common import is_package
-from node_manager_fkie.detailed_msg_box import WarningMessageBox
+from node_manager_fkie.common import is_package, utf8
+from node_manager_fkie.detailed_msg_box import MessageBox
 from node_manager_fkie.editor.yaml_highlighter import YamlHighlighter
 import node_manager_fkie as nm
 
 from .editor import TextEdit
 try:
-    from python_qt_binding.QtGui import QApplication, QMessageBox, QVBoxLayout, QSizePolicy
+    from python_qt_binding.QtGui import QApplication, QVBoxLayout, QSizePolicy
     from python_qt_binding.QtGui import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QToolButton
 except:
-    from python_qt_binding.QtWidgets import QApplication, QMessageBox, QVBoxLayout, QSizePolicy
+    from python_qt_binding.QtWidgets import QApplication, QVBoxLayout, QSizePolicy
     from python_qt_binding.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QToolButton
 
 
@@ -313,9 +313,9 @@ class SyncDialog(QDialog):
 #        QDialog.accept(self)
 #        self.resetView()
             except Exception as e:
-                WarningMessageBox(QMessageBox.Warning, "Create sync interface",
-                                  "Error while create interface",
-                                  str(e)).exec_()
+                MessageBox.warning(self, "Create sync interface",
+                                   "Error while create interface",
+                                   utf8(e))
         elif self.interface_field.isVisible():
             interface = self.interface_field.currentText()
             if self._interfaces_files and interface in self._interfaces_files:
@@ -383,9 +383,9 @@ class SyncDialog(QDialog):
                     iface = f.read()
                     self.textedit.setText(iface)
             except Exception as e:
-                WarningMessageBox(QMessageBox.Warning, "Edit sync interface",
-                                  "Error while open interface",
-                                  str(e)).exec_()
+                MessageBox.warning(self, "Edit sync interface",
+                                   "Error while open interface",
+                                   utf8(e))
         self.resize(350, 300)
 
     def resetView(self):

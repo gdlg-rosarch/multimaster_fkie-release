@@ -1,3 +1,5 @@
+# encoding: utf-8
+#
 # Software License Agreement (BSD License)
 #
 # Copyright (c) 2012, Fraunhofer FKIE/US, Alexander Tiderko
@@ -50,8 +52,8 @@ from master_discovery_fkie.common import get_hostname, resolve_url, subdomain
 import node_manager_fkie as nm
 
 from .capability_table import CapabilityTable
-from .common import masteruri_from_ros, package_name, to_url
-from .detailed_msg_box import WarningMessageBox
+from .common import masteruri_from_ros, package_name, utf8
+from .detailed_msg_box import MessageBox
 from .discovery_listener import MasterListService, MasterStateTopic, MasterStatisticTopic, OwnMasterMonitoring
 from .editor import Editor
 from .launch_config import LaunchConfig  # , LaunchConfigException
@@ -72,10 +74,10 @@ from .update_handler import UpdateHandler
 
 
 try:
-    from python_qt_binding.QtGui import QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedLayout, QWidget
+    from python_qt_binding.QtGui import QApplication, QFileDialog, QMainWindow, QStackedLayout, QWidget
     from python_qt_binding.QtGui import QShortcut, QVBoxLayout, QColorDialog, QDialog, QRadioButton
 except:
-    from python_qt_binding.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedLayout, QWidget
+    from python_qt_binding.QtWidgets import QApplication, QFileDialog, QMainWindow, QStackedLayout, QWidget
     from python_qt_binding.QtWidgets import QShortcut, QVBoxLayout, QColorDialog, QDialog, QRadioButton
 
 
@@ -272,7 +274,7 @@ class MainWindow(QMainWindow):
         try:
             from docutils import examples
             with file(nm.settings().HELP_FILE) as f:
-                self.textBrowser.setText(examples.html_body(unicode(f.read())))
+                self.textBrowser.setText(examples.html_body(utf8(f.read())))
         except:
             import traceback
             msg = "Error while generate help: %s" % traceback.format_exc(2)
@@ -283,9 +285,9 @@ class MainWindow(QMainWindow):
             ScreenHandler.testScreen()
         except Exception as e:
             rospy.logerr("No SCREEN available! You can't launch nodes.")
-#      WarningMessageBox(QMessageBox.Warning, "No SCREEN",
+#      MessageBox.warning(self, "No SCREEN",
 #                        "No SCREEN available! You can't launch nodes.",
-#                        '%s'%e).exec_()
+#                        '%s'%utf8(e))
 
         self.imageLabel.mouseDoubleClickEvent = self.image_mouseDoubleClickEvent
         self.masternameLabel.mouseDoubleClickEvent = self.mastername_mouseDoubleClickEvent
@@ -434,7 +436,7 @@ class MainWindow(QMainWindow):
                             if not m.is_local:
                                 m.killall_roscore()
                     except Exception as e:
-                        rospy.logwarn("Error while stop nodes on %s: %s" % (uri, e))
+                        rospy.logwarn("Error while stop nodes on %s: %s" % (uri, utf8(e)))
                 QTimer.singleShot(200, self._test_for_finish)
             else:
                 self._close_on_exit = True
@@ -584,9 +586,9 @@ class MainWindow(QMainWindow):
                                                                            self.masters[masteruri].current_user))
                                 self.launch_dock.progress_queue.start()
                     except Exception as e:
-                        WarningMessageBox(QMessageBox.Warning, "Load default configuration",
-                                          'Load default configuration %s failed!' % self.default_load_launch,
-                                          '%s' % e).exec_()
+                        MessageBox.warning(self, "Load default configuration",
+                                           'Load default configuration %s failed!' % self.default_load_launch,
+                                           '%s' % utf8(e))
         return self.masters[masteruri]
 
     def on_host_update_request(self, host):
@@ -874,7 +876,7 @@ class MainWindow(QMainWindow):
                                 QTimer.singleShot(2000, self._load_default_profile_slot)
                     self.capabilitiesTable.updateState(minfo.masteruri, minfo)
                 except Exception, e:
-                    rospy.logwarn("Error while process received master info from %s: %s", minfo.masteruri, str(e))
+                    rospy.logwarn("Error while process received master info from %s: %s", minfo.masteruri, utf8(e))
             # update the duplicate nodes
             self.updateDuplicateNodes()
             # update the buttons, whether master is synchronized or not
@@ -932,7 +934,7 @@ class MainWindow(QMainWindow):
         text = ''.join([text, '<dt><b>License</b>: ', 'BSD, some icons are licensed under the GNU Lesser General Public License (LGPL) or Creative Commons Attribution-Noncommercial 3.0 License', '</dt>'])
         text = ''.join([text, '</dl>'])
         text = ''.join([text, '<dt><b>Version</b>: ', nm.__version__, ' (', nm.__date__, ')', '</dt>'])
-        QMessageBox.about(self, 'About Node Manager', text)
+        MessageBox.about(self, 'About Node Manager', text)
 
     def on_master_log_clicked(self):
         '''
@@ -967,27 +969,27 @@ class MainWindow(QMainWindow):
                         if username == 'last used':
                             usr = nm.settings().host_user(hostname)
                         if log_master_discovery:
-                            self._progress_queue.add2queue(str(uuid.uuid4()),
+                            self._progress_queue.add2queue(utf8(uuid.uuid4()),
                                                            '%s: show log of master discovery' % hostname,
                                                            nm.starter().openLog,
                                                            ('/master_discovery', hostname, usr, screen_only))
                         if log_master_sync:
-                            self._progress_queue.add2queue(str(uuid.uuid4()),
+                            self._progress_queue.add2queue(utf8(uuid.uuid4()),
                                                            '%s: show log of master sync' % hostname,
                                                            nm.starter().openLog,
                                                            ('/master_sync', hostname, usr, screen_only))
                     except (Exception, nm.StartException) as err:
                         import traceback
                         print traceback.format_exc(1)
-                        rospy.logwarn("Error while show LOG for master_discovery %s: %s" % (str(hostname), err))
-                        WarningMessageBox(QMessageBox.Warning, "Show log error",
-                                          'Error while show log of master_discovery',
-                                          '%s' % err).exec_()
+                        rospy.logwarn("Error while show LOG for master_discovery %s: %s" % (utf8(hostname), utf8(err)))
+                        MessageBox.warning(self, "Show log error",
+                                           'Error while show log of master_discovery',
+                                           '%s' % utf8(err))
                     self._progress_queue.start()
             except Exception as err:
-                WarningMessageBox(QMessageBox.Warning, "Show log error",
-                                  'Error while parse parameter',
-                                  '%s' % err).exec_()
+                MessageBox.warning(self, "Show log error",
+                                   'Error while parse parameter',
+                                   '%s' % utf8(err))
 
     def on_set_time_clicked(self):
         if self.currentMaster is not None:  # and not self.currentMaster.is_local:
@@ -1002,8 +1004,8 @@ class MainWindow(QMainWindow):
             if time_dialog.exec_():
                 running_nodes = self.currentMaster.getRunningNodesIfLocal(remove_system_nodes=True)
                 if running_nodes:
-                    ret = QMessageBox.question(self, 'Set Time', 'There are running nodes. Stop them?', QMessageBox.Yes, QMessageBox.No)
-                    if ret == QMessageBox.Yes:
+                    ret = MessageBox.question(self, 'Set Time', 'There are running nodes. Stop them?', buttons=MessageBox.Yes | MessageBox.No)
+                    if ret == MessageBox.Yes:
                         self.currentMaster.stop_nodes_by_name(running_nodes)
                 if time_dialog.dateRadioButton.isChecked():
                     try:
@@ -1018,8 +1020,8 @@ class MainWindow(QMainWindow):
                                 errormsg += "\n!!!needed to be at the very end of file, don't forget a new line at the end!!!"
                                 errormsg += "\n\nBe aware, it does not replace the time synchronization!"
                                 errormsg += "\nIt sets approximate time without undue delays on communication layer."
-                            WarningMessageBox(QMessageBox.Warning, "Time set error",
-                                              'Error while set time on %s' % uri, '%s' % errormsg).exec_()
+                            MessageBox.warning(self, "Time set error",
+                                               'Error while set time on %s' % uri, '%s' % utf8(errormsg))
                         else:
                             timediff = time.time() - newtime
                             rospy.loginfo("  New time difference to %s is approx.: %.3fs" % (self.currentMaster.master_state.uri, timediff))
@@ -1028,10 +1030,10 @@ class MainWindow(QMainWindow):
                         errormsg = '%s' % e
                         if errormsg.find('setTime') > -1:
                             errormsg += "\nUpdate remote multimaster_fkie!"
-                        rospy.logwarn("Error while set time on %s: %s" % (self.currentMaster.master_state.uri, errormsg))
-                        WarningMessageBox(QMessageBox.Warning, "Time sync error",
-                                          'Error while set time on %s' % self.currentMaster.master_state.uri,
-                                          '%s' % errormsg).exec_()
+                        rospy.logwarn("Error while set time on %s: %s" % (self.currentMaster.master_state.uri, utf8(errormsg)))
+                        MessageBox.warning(self, "Time sync error",
+                                           'Error while set time on %s' % self.currentMaster.master_state.uri,
+                                           '%s' % utf8(errormsg))
                     finally:
                         socket.setdefaulttimeout(None)
                 elif time_dialog.ntpdateRadioButton.isChecked():
@@ -1042,7 +1044,7 @@ class MainWindow(QMainWindow):
 
     def on_refresh_master_clicked(self):
         if self.currentMaster is not None:
-            rospy.loginfo("Request an update from %s", str(self.currentMaster.master_state.monitoruri))
+            rospy.loginfo("Request an update from %s", utf8(self.currentMaster.master_state.monitoruri))
             if self.currentMaster.master_info is not None:
                 check_ts = self.currentMaster.master_info.check_ts
                 self.currentMaster.master_info.timestamp = self.currentMaster.master_info.timestamp - 1.0
@@ -1063,17 +1065,20 @@ class MainWindow(QMainWindow):
                 params = dia.run_params()
                 if params:
                     params = params + (False, self.currentMaster.current_user,)  # autorequest must be false
-                try:
-                    self._progress_queue.add2queue(str(uuid.uuid4()),
-                                                   'run `%s` on %s' % (params[2], params[0]),
-                                                   nm.starter().runNodeWithoutConfig,
-                                                   params)
-                    self._progress_queue.start()
-                except (Exception, nm.StartException), e:
-                    rospy.logwarn("Error while run `%s` on %s: %s", params[2], params[0], str(e))
-                    WarningMessageBox(QMessageBox.Warning, "Run error",
-                                      'Error while run node %s [%s]' % (params[2], params[1]),
-                                      str(e)).exec_()
+                    try:
+                        self._progress_queue.add2queue(utf8(uuid.uuid4()),
+                                                       'run `%s` on %s' % (params[2], params[0]),
+                                                       nm.starter().runNodeWithoutConfig,
+                                                       params)
+                        self._progress_queue.start()
+                    except (Exception, nm.StartException), e:
+                        rospy.logwarn("Error while run `%s` on %s: %s", params[2], params[0], utf8(e))
+                        MessageBox.warning(self, "Run error",
+                                           'Error while run node %s [%s]' % (params[2], params[1]),
+                                           utf8(e))
+                else:
+                    MessageBox.critical(self, "Run error",
+                                        'No binary specified')
 
     def on_rqt_plugin_start(self, name, plugin):
         if self.currentMaster is not None:
@@ -1110,14 +1115,14 @@ class MainWindow(QMainWindow):
                         count_topics = '%d selected' % len(topic_names)
                     else:
                         args = ['-a']
-                    ret = QMessageBox.question(self, 'Start rosbag', 'Start rosbag record with %s topics to %s/record_TIMESTAMP?' % (count_topics, nm.settings().LOG_PATH), QMessageBox.Yes, QMessageBox.No)
-                    if ret == QMessageBox.No:
+                    ret = MessageBox.question(self, 'Start rosbag', 'Start rosbag record with %s topics to %s/record_TIMESTAMP?' % (count_topics, nm.settings().LOG_PATH), buttons=MessageBox.Yes | MessageBox.No)
+                    if ret == MessageBox.No:
                         return
                     args.append("-o %s/record" % nm.settings().LOG_PATH)
                     suffix = "_%d" % int(time.time())
                 node_name = '%s%s_%s%s' % (prefix, name.lower().replace(' ', '_'),
                                            self.currentMaster.master_state.name, suffix)
-                self.currentMaster._progress_queue.add2queue(str(uuid.uuid4()),
+                self.currentMaster._progress_queue.add2queue(utf8(uuid.uuid4()),
                                                              'start %s' % name,
                                                              nm.starter().runNodeWithoutConfig,
                                                              ('localhost', package, binary,
@@ -1126,11 +1131,11 @@ class MainWindow(QMainWindow):
                                                               False))
             except (Exception, nm.StartException), e:
                 import traceback
-                print traceback.format_exc(1)
-                rospy.logwarn("Error while start %s: %s" % (name, e))
-                WarningMessageBox(QMessageBox.Warning, "Start error",
-                                  'Error while start %s' % name,
-                                  '%s' % e).exec_()
+                print utf8(traceback.format_exc(1))
+                rospy.logwarn("Error while start %s: %s" % (name, utf8(e)))
+                MessageBox.warning(self, "Start error",
+                                   'Error while start %s' % name,
+                                   '%s' % utf8(e))
             self.currentMaster._progress_queue.start()
 
     def on_sync_dialog_released(self, released=False, masteruri=None, external_call=False):
@@ -1148,20 +1153,20 @@ class MainWindow(QMainWindow):
                     host = get_hostname(master.masteruri)
                     if self._sync_dialog.interface_filename is not None:
                         # copy the interface file to remote machine
-                        self._progress_queue_sync.add2queue(str(uuid.uuid4()),
+                        self._progress_queue_sync.add2queue(utf8(uuid.uuid4()),
                                                             'Transfer sync interface %s' % host,
                                                             nm.starter().transfer_files,
                                                             ("%s" % host, self._sync_dialog.interface_filename, False, master.current_user))
-                    self._progress_queue_sync.add2queue(str(uuid.uuid4()),
+                    self._progress_queue_sync.add2queue(utf8(uuid.uuid4()),
                                                         'Start sync on %s' % host,
                                                         nm.starter().runNodeWithoutConfig,
                                                         ("%s" % host, 'master_sync_fkie', 'master_sync', 'master_sync', self._sync_dialog.sync_args, "%s" % master.masteruri, False, master.current_user))
                     self._progress_queue_sync.start()
                 except:
                     import traceback
-                    WarningMessageBox(QMessageBox.Warning, "Start sync error",
-                                      "Error while start sync node",
-                                      str(traceback.format_exc(1))).exec_()
+                    MessageBox.warning(self, "Start sync error",
+                                       "Error while start sync node",
+                                       utf8(traceback.format_exc(1)))
             else:
                 self.syncButton.setChecked(False)
         elif sync_node is not None:
@@ -1189,8 +1194,8 @@ class MainWindow(QMainWindow):
                     node = master.getNode('/master_sync')
                     if node and node[0].has_configs():
                         def_cfg_info = '\nNote: default_cfg parameter will be changed!' if node[0].has_default_cfgs(node[0].cfgs) else ''
-                        ret = QMessageBox.question(self, 'Start synchronization', 'Start the synchronization using loaded configuration?\n\n `No` starts the master_sync with default parameter.%s' % def_cfg_info, QMessageBox.Yes, QMessageBox.No)
-                        if ret == QMessageBox.Yes:
+                        ret = MessageBox.question(self, 'Start synchronization', 'Start the synchronization using loaded configuration?\n\n `No` starts the master_sync with default parameter.%s' % def_cfg_info, buttons=MessageBox.Yes | MessageBox.No)
+                        if ret == MessageBox.Yes:
                             master.start_nodes([node[0]])
                             return
 
@@ -1204,10 +1209,10 @@ class MainWindow(QMainWindow):
                                      '_sync_remote_nodes:=False']
                 try:
                     host = get_hostname(master.masteruri)
-                    self._progress_queue_sync.add2queue(str(uuid.uuid4()),
-                                                        'start sync on ' + str(host),
+                    self._progress_queue_sync.add2queue(utf8(uuid.uuid4()),
+                                                        'start sync on ' + utf8(host),
                                                         nm.starter().runNodeWithoutConfig,
-                                                        (str(host), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, str(master.masteruri), False, master.current_user))
+                                                        (utf8(host), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, utf8(master.masteruri), False, master.current_user))
                     self._progress_queue_sync.start()
                 except:
                     pass
@@ -1265,7 +1270,7 @@ class MainWindow(QMainWindow):
         try:
             tries = self._con_tries[masteruri]
             if tries > 1:
-                con_err = '<span style=" color:red;">connection problems (%s tries)! </span>' % str(tries)
+                con_err = '<span style=" color:red;">connection problems (%s tries)! </span>' % utf8(tries)
         except:
             pass
         if self.__current_master_label_name != name:
@@ -1274,7 +1279,7 @@ class MainWindow(QMainWindow):
             self.masternameLabel.setText('<span style=" font-size:14pt; font-weight:600;">%s</span>' % show_name)
             color = QColor.fromRgb(nm.settings().host_color(self.__current_master_label_name, self._default_color.rgb()))
             self._new_color(color)
-        ts = 'updated: %s' % str(timestamp) if timestamp is not None else ''
+        ts = 'updated: %s' % utf8(timestamp) if timestamp is not None else ''
         if not nm.settings().autoupdate:
             ts = '%s<span style=" color:orange;"> AU off</span>' % ts
         self.masterInfoLabel.setText('<span style=" font-size:8pt;">%s%s</span>' % (con_err, ts))
@@ -1354,7 +1359,7 @@ class MainWindow(QMainWindow):
 
     def on_master_table_activated(self, selected):
         item = self.master_model.itemFromIndex(selected)
-        QMessageBox.information(self, item.name, item.toolTip())
+        MessageBox.information(self, item.name, item.toolTip())
 
     def on_master_selection_changed(self, selected):
         '''
@@ -1506,11 +1511,11 @@ class MainWindow(QMainWindow):
                         usr = username
                         if username == 'last used':
                             usr = nm.settings().host_user(hostname)
-                        muri = None if masteruri == 'ROS_MASTER_URI' else str(masteruri)
-                        self._progress_queue.add2queue(str(uuid.uuid4()),
+                        muri = None if masteruri == 'ROS_MASTER_URI' else utf8(masteruri)
+                        self._progress_queue.add2queue(utf8(uuid.uuid4()),
                                                        'start discovering on %s' % hostname,
                                                        nm.starter().runNodeWithoutConfig,
-                                                       (str(hostname), 'master_discovery_fkie', str(discovery_type), str(discovery_type), args, muri, False, usr))
+                                                       (utf8(hostname), 'master_discovery_fkie', utf8(discovery_type), utf8(discovery_type), args, muri, False, usr))
 
                         # start the master sync with default settings
                         if start_sync:
@@ -1522,10 +1527,10 @@ class MainWindow(QMainWindow):
                                                      '_ignore_topics:=[]', '_sync_topics:=[]',
                                                      '_ignore_services:=[]', '_sync_services:=[]',
                                                      '_sync_remote_nodes:=False']
-                                self._progress_queue_sync.add2queue(str(uuid.uuid4()),
+                                self._progress_queue_sync.add2queue(utf8(uuid.uuid4()),
                                                                     'start sync on %s' % hostname,
                                                                     nm.starter().runNodeWithoutConfig,
-                                                                    (str(hostname), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, muri, False, usr))
+                                                                    (utf8(hostname), 'master_sync_fkie', 'master_sync', 'master_sync', default_sync_args, muri, False, usr))
                                 self._progress_queue_sync.start()
                             else:
                                 if hostname not in self._syncs_to_start:
@@ -1533,42 +1538,42 @@ class MainWindow(QMainWindow):
                     except (Exception, nm.StartException) as e:
                         import traceback
                         print traceback.format_exc(1)
-                        rospy.logwarn("Error while start master_discovery for %s: %s" % (str(hostname), e))
-                        WarningMessageBox(QMessageBox.Warning, "Start error",
-                                          'Error while start master_discovery',
-                                          str(e)).exec_()
+                        rospy.logwarn("Error while start master_discovery for %s: %s" % (utf8(hostname), utf8(e)))
+                        MessageBox.warning(self, "Start error",
+                                           'Error while start master_discovery',
+                                           utf8(e))
                     self._progress_queue.start()
             except Exception as e:
-                WarningMessageBox(QMessageBox.Warning, "Start error",
-                                  'Error while parse parameter',
-                                  str(e)).exec_()
+                MessageBox.warning(self, "Start error",
+                                   'Error while parse parameter',
+                                   utf8(e))
 
     def _join_network(self, network):
         try:
             hostname = 'localhost'
             args = []
             if network < 100 and network >= 0:
-                args.append(''.join(['_mcast_port:=', str(11511 + int(network))]))
-            self._progress_queue.add2queue(str(uuid.uuid4()),
-                                           'start discovering on ' + str(hostname),
+                args.append(''.join(['_mcast_port:=', utf8(11511 + int(network))]))
+            self._progress_queue.add2queue(utf8(uuid.uuid4()),
+                                           'start discovering on ' + utf8(hostname),
                                            nm.starter().runNodeWithoutConfig,
-                                           (str(hostname), 'master_discovery_fkie', 'master_discovery', 'master_discovery', args, None, False))
+                                           (utf8(hostname), 'master_discovery_fkie', 'master_discovery', 'master_discovery', args, None, False))
             self._progress_queue.start()
         except (Exception, nm.StartException), e:
-            rospy.logwarn("Error while start master_discovery for %s: %s", str(hostname), str(e))
-            WarningMessageBox(QMessageBox.Warning, "Start error",
-                              'Error while start master_discovery',
-                              str(e)).exec_()
+            rospy.logwarn("Error while start master_discovery for %s: %s", utf8(hostname), utf8(e))
+            MessageBox.warning(self, "Start error",
+                               'Error while start master_discovery',
+                               utf8(e))
 
     def poweroff_host(self, host):
         try:
-            if nm.is_local(str(host)):
-                ret = QMessageBox.warning(self, "ROS Node Manager",
-                                                "Do you really want to shutdown localhost?",
-                                                QMessageBox.Ok | QMessageBox.Cancel)
-                if ret == QMessageBox.Cancel:
+            if nm.is_local(utf8(host)):
+                ret = MessageBox.warning(self, "ROS Node Manager",
+                                         "Do you really want to shutdown localhost?",
+                                         buttons=MessageBox.Ok | MessageBox.Cancel)
+                if ret == MessageBox.Cancel:
                     return
-            self._progress_queue.add2queue(str(uuid.uuid4()),
+            self._progress_queue.add2queue(utf8(uuid.uuid4()),
                                            'poweroff `%s`' % host,
                                            nm.starter().poweroff,
                                            ('%s' % host,))
@@ -1580,29 +1585,29 @@ class MainWindow(QMainWindow):
             self.on_description_update('Description', '')
             self.launch_dock.raise_()
         except (Exception, nm.StartException), e:
-            rospy.logwarn("Error while poweroff %s: %s", host, str(e))
-            WarningMessageBox(QMessageBox.Warning, "Run error",
-                              'Error while poweroff %s' % host,
-                              '%s' % e).exec_()
+            rospy.logwarn("Error while poweroff %s: %s", host, utf8(e))
+            MessageBox.warning(self, "Run error",
+                               'Error while poweroff %s' % host,
+                               '%s' % utf8(e))
 
     def rosclean(self, host):
         try:
-            ret = QMessageBox.warning(self, "ROS Node Manager",
-                                            "Do you really want delete all logs on `%s`?" % host,
-                                            QMessageBox.Ok | QMessageBox.Cancel)
-            if ret == QMessageBox.Cancel:
+            ret = MessageBox.warning(self, "ROS Node Manager",
+                                     "Do you really want delete all logs on `%s`?" % host,
+                                     buttons=MessageBox.Ok | MessageBox.Cancel)
+            if ret == MessageBox.Cancel:
                 return
-            self._progress_queue.add2queue(str(uuid.uuid4()),
+            self._progress_queue.add2queue(utf8(uuid.uuid4()),
                                            'rosclean `%s`' % host,
                                            nm.starter().rosclean,
                                            ('%s' % host,))
             self._progress_queue.start()
             self.launch_dock.raise_()
         except (Exception, nm.StartException), e:
-            rospy.logwarn("Error while rosclean %s: %s", host, str(e))
-            WarningMessageBox(QMessageBox.Warning, "Run error",
-                              'Error while rosclean %s' % host,
-                              '%s' % e).exec_()
+            rospy.logwarn("Error while rosclean %s: %s", host, utf8(e))
+            MessageBox.warning(self, "Run error",
+                               'Error while rosclean %s' % host,
+                               '%s' % utf8(e))
 
 # ======================================================================================================================
 # Handling of the launch view signals
@@ -1628,12 +1633,11 @@ class MainWindow(QMainWindow):
                 master_proxy.launchfiles = (path, argv)
             except Exception, e:
                 import traceback
-                print traceback.format_exc(1)
-                WarningMessageBox(QMessageBox.Warning, "Loading launch file", path, '%s' % e).exec_()
+                print utf8(traceback.format_exc(1))
+                MessageBox.warning(self, "Loading launch file", path, '%s' % utf8(e))
 #      self.setCursor(cursor)
         else:
-            QMessageBox.information(self, "Load of launch file",
-                                          "Select a master first!",)
+            MessageBox.information(self, "Load of launch file", "Select a master first!",)
 
     def on_load_launch_as_default_bypkg(self, pkg, launch_file, master_proxy, args=[], host=None):
         argv = list(args)
@@ -1699,8 +1703,7 @@ class MainWindow(QMainWindow):
                                                        master_proxy.current_user))
             self.launch_dock.progress_queue.start()
         else:
-            QMessageBox.information(self, "Load of launch file",
-                                          "Select a master first!",)
+            MessageBox.information(self, "Load of launch file", "Select a master first!",)
 
     def on_launch_edit(self, files, search_text='', trynr=1):
         '''
@@ -1772,15 +1775,15 @@ class MainWindow(QMainWindow):
                                                                   nm.starter().transfer_files,
                                                                   ('%s' % host, path, False, username))
                         if recursive:
-                            for f in LaunchConfig.getIncludedFiles(path):
-                                self.launch_dock.progress_queue.add2queue(str(uuid.uuid4()),
+                            for f in LaunchConfig.included_files(path):
+                                self.launch_dock.progress_queue.add2queue(utf8(uuid.uuid4()),
                                                                           'transfer files to %s' % host,
                                                                           nm.starter().transfer_files,
                                                                           ('%s' % host, f, False, username))
                     self.launch_dock.progress_queue.start()
                 except Exception, e:
-                    WarningMessageBox(QMessageBox.Warning, "Transfer error",
-                                      'Error while transfer files', '%s' % e).exec_()
+                    MessageBox.warning(self, "Transfer error",
+                                       'Error while transfer files', '%s' % utf8(e))
 
     def _reload_globals_at_next_start(self, launch_file):
         if self.currentMaster is not None:
@@ -1836,18 +1839,19 @@ class MainWindow(QMainWindow):
             choices = dict()
             for (muri, lfile) in new_affected:
                 master = self.getMaster(muri)
-                if master is not None:
+                if master is not None and master.online:
                     master.launchfile = lfile
                     choices[''.join([os.path.basename(lfile), ' [', master.mastername, ']'])] = (master, lfile)
-            cfgs, _ = SelectDialog.getValue('Reload configurations?',
-                                            '<b>%s</b> was changed.<br>Select affected configurations to reload:' % ', '.join([os.path.basename(f) for f in self._changed_files.keys()]), choices.keys(),
-                                            False, True,
-                                            ':/icons/crystal_clear_launch_file.png',
-                                            self)
+            if choices:
+                cfgs, _ = SelectDialog.getValue('Reload configurations?',
+                                                '<b>%s</b> was changed.<br>Select affected configurations to reload:' % ', '.join([os.path.basename(f) for f in self._changed_files.keys()]), choices.keys(),
+                                                False, True,
+                                                ':/icons/crystal_clear_launch_file.png',
+                                                self)
+                for c in cfgs:
+                    choices[c][0].launchfiles = choices[c][1]
             for (muri, lfile) in new_affected:
                 self.__in_question.remove((muri, lfile))
-            for c in cfgs:
-                choices[c][0].launchfiles = choices[c][1]
         self._changed_files.clear()
 
     def _check_for_changed_binaries(self):
@@ -1929,7 +1933,7 @@ class MainWindow(QMainWindow):
             for c in cfgs:
                 host = '%s' % get_hostname(choices[c][0].masteruri)
                 username = choices[c][0].current_user
-                self.launch_dock.progress_queue.add2queue(str(uuid.uuid4()),
+                self.launch_dock.progress_queue.add2queue(utf8(uuid.uuid4()),
                                                           'transfer files to %s' % host,
                                                           nm.starter().transfer_files,
                                                           (host, choices[c][1], False, username))
@@ -2027,6 +2031,9 @@ class MainWindow(QMainWindow):
         elif url.toString().startswith('restart-node://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_force_start_nodes()
+        elif url.toString().startswith('restart-node-g://'):
+            if self.currentMaster is not None:
+                self.currentMaster.on_force_start_nodes(True)
         elif url.toString().startswith('start-node-at-host://'):
             if self.currentMaster is not None:
                 self.currentMaster.on_start_nodes_at_host()
@@ -2057,16 +2064,16 @@ class MainWindow(QMainWindow):
     def _url_path(self, url):
         '''Helper class for Qt5 compatibility'''
         if hasattr(url, 'encodedPath'):
-            return str(url.encodedPath())
+            return utf8(url.encodedPath())
         else:
-            return str(url.path())
+            return utf8(url.path())
 
     def _url_host(self, url):
         '''Helper class for Qt5 compatibility'''
         if hasattr(url, 'encodedHost'):
-            return str(url.encodedHost())
+            return utf8(url.encodedHost())
         else:
-            return str(url.host())
+            return utf8(url.host())
 
     def keyReleaseEvent(self, event):
         '''
@@ -2103,10 +2110,10 @@ class MainWindow(QMainWindow):
                     del self.__icons[self.__current_master_label_name]
                 self._assigne_icon(self.__current_master_label_name)
             except Exception as e:
-                WarningMessageBox(QMessageBox.Warning, "Error",
-                                  'Set robot image for %s failed!' % str(self.__current_master_label_name),
-                                  '%s' % str(e)).exec_()
-                rospy.logwarn("Error while set robot image for %s: %s", str(self.__current_master_label_name), str(e))
+                MessageBox.warning(self, "Error",
+                                   'Set robot image for %s failed!' % utf8(self.__current_master_label_name),
+                                   '%s' % utf8(e))
+                rospy.logwarn("Error while set robot image for %s: %s", utf8(self.__current_master_label_name), utf8(e))
 
     def _set_custom_colors(self):
         colors = [self._default_color, QColor(87, 93, 94), QColor(60, 116, 96)]
@@ -2135,10 +2142,10 @@ class MainWindow(QMainWindow):
                 else:
                     self._new_color(prev_color)
             except Exception as e:
-                WarningMessageBox(QMessageBox.Warning, "Error",
-                                  'Set robot color for %s failed!' % str(self.__current_master_label_name),
-                                  '%s' % str(e)).exec_()
-                rospy.logwarn("Error while set robot color for %s: %s", str(self.__current_master_label_name), str(e))
+                MessageBox.warning(self, "Error",
+                                   'Set robot color for %s failed!' % utf8(self.__current_master_label_name),
+                                   '%s' % utf8(e))
+                rospy.logwarn("Error while set robot color for %s: %s", utf8(self.__current_master_label_name), utf8(e))
 
     def _on_robot_icon_changed(self, masteruri, path):
         '''
@@ -2154,4 +2161,4 @@ class MainWindow(QMainWindow):
                 if DIAGNOSTICS_AVAILABLE:
                     self.diagnostics_signal.emit(diagnostic)
         except Exception as err:
-            rospy.logwarn('Error while process diagnostic messages: %s' % err)
+            rospy.logwarn('Error while process diagnostic messages: %s' % utf8(err))
