@@ -36,21 +36,24 @@ import os
 
 import rospy
 
-from node_manager_fkie.common import package_name
+from node_manager_fkie.common import package_name, utf8
 from node_manager_fkie.run_dialog import PackageDialog
+from node_manager_fkie.launch_config import LaunchConfig
 import node_manager_fkie as nm
 
 from .line_number_widget import LineNumberWidget
+from .graph_view import GraphViewWidget
 from .text_edit import TextEdit
 from .text_search_frame import TextSearchFrame
 from .text_search_thread import TextSearchThread
+from node_manager_fkie.detailed_msg_box import MessageBox
 
 try:
-    from python_qt_binding.QtGui import QApplication, QAction, QLineEdit, QMessageBox, QWidget, QMainWindow
+    from python_qt_binding.QtGui import QApplication, QAction, QLineEdit, QWidget, QMainWindow
     from python_qt_binding.QtGui import QDialog, QInputDialog, QLabel, QMenu, QPushButton, QTabWidget
     from python_qt_binding.QtGui import QHBoxLayout, QVBoxLayout, QSpacerItem, QSplitter, QSizePolicy
 except:
-    from python_qt_binding.QtWidgets import QApplication, QAction, QLineEdit, QMessageBox, QWidget, QMainWindow
+    from python_qt_binding.QtWidgets import QApplication, QAction, QLineEdit, QWidget, QMainWindow
     from python_qt_binding.QtWidgets import QDialog, QInputDialog, QLabel, QMenu, QPushButton, QTabWidget
     from python_qt_binding.QtWidgets import QHBoxLayout, QVBoxLayout, QSpacerItem, QSplitter, QSizePolicy
 
@@ -100,7 +103,7 @@ class Editor(QMainWindow):
         @type search_text: C{str} (Default: C{Empty String})
         '''
         QMainWindow.__init__(self, parent)
-        self.setObjectName(' - '.join(['Editor', str(filenames)]))
+        self.setObjectName('Editor - %s' % utf8(filenames))
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlags(Qt.Window)
         self.mIcon = QIcon(":/icons/crystal_clear_edit_launch.png")
@@ -129,6 +132,7 @@ class Editor(QMainWindow):
         self.tabWidget.setMovable(False)
         self.tabWidget.setObjectName("tabWidget")
         self.tabWidget.tabCloseRequested.connect(self.on_close_tab)
+        self.tabWidget.currentChanged.connect(self.on_tab_changed)
 
         self.verticalLayout.addWidget(self.tabWidget)
         self.buttons = self._create_buttons()
@@ -139,12 +143,18 @@ class Editor(QMainWindow):
         self.find_dialog.search_result_signal.connect(self.on_search_result)
         self.find_dialog.replace_signal.connect(self.on_replace)
         self.addDockWidget(Qt.RightDockWidgetArea, self.find_dialog)
+
+        self.graph_view = GraphViewWidget(self.tabWidget, self)
+        self.graph_view.load_signal.connect(self.on_graph_load_file)
+        self.graph_view.goto_signal.connect(self.on_graph_goto)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.graph_view)
         # open the files
         for f in filenames:
             if f:
                 self.on_load_request(os.path.normpath(f), search_text)
         self.readSettings()
         self.find_dialog.setVisible(False)
+        self.graph_view.setVisible(False)
 
 #  def __del__(self):
 #    print "******** destroy", self.objectName()
@@ -155,26 +165,16 @@ class Editor(QMainWindow):
         self.horizontalLayout = QHBoxLayout(self.buttons)
         self.horizontalLayout.setContentsMargins(4, 0, 4, 0)
         self.horizontalLayout.setObjectName("horizontalLayout")
-        # add the search button
-        self.searchButton = QPushButton(self)
-        self.searchButton.setObjectName("searchButton")
-#        self.searchButton.clicked.connect(self.on_shortcut_find)
-        self.searchButton.toggled.connect(self.on_toggled_find)
-        self.searchButton.setText(self._translate("&Find"))
-        self.searchButton.setToolTip('Open a search dialog (Ctrl+F)')
-        self.searchButton.setFlat(True)
-        self.searchButton.setCheckable(True)
-        self.horizontalLayout.addWidget(self.searchButton)
-        # add the replace button
-        self.replaceButton = QPushButton(self)
-        self.replaceButton.setObjectName("replaceButton")
-#        self.replaceButton.clicked.connect(self.on_shortcut_replace)
-        self.replaceButton.toggled.connect(self.on_toggled_replace)
-        self.replaceButton.setText(self._translate("&Replace"))
-        self.replaceButton.setToolTip('Open a search&replace dialog (Ctrl+R)')
-        self.replaceButton.setFlat(True)
-        self.replaceButton.setCheckable(True)
-        self.horizontalLayout.addWidget(self.replaceButton)
+        # add open upper launchfile button
+        self.upperButton = QPushButton(self)
+        self.upperButton.setObjectName("upperButton")
+        self.upperButton.clicked.connect(self.on_upperButton_clicked)
+        self.upperButton.setIcon(QIcon(":/icons/up.png"))
+        self.upperButton.setShortcut("Ctrl+U")
+        self.upperButton.setToolTip('Open the file which include the current file (Ctrl+U)')
+        self.upperButton.setFlat(True)
+        self.horizontalLayout.addWidget(self.upperButton)
+
         # add the goto button
         self.gotoButton = QPushButton(self)
         self.gotoButton.setObjectName("gotoButton")
@@ -187,6 +187,16 @@ class Editor(QMainWindow):
         # add a tag button
         self.tagButton = self._create_tag_button(self)
         self.horizontalLayout.addWidget(self.tagButton)
+        # add save button
+        self.saveButton = QPushButton(self)
+        self.saveButton.setObjectName("saveButton")
+        self.saveButton.setIcon(QIcon.fromTheme("document-save"))
+        self.saveButton.clicked.connect(self.on_saveButton_clicked)
+        self.saveButton.setText(self._translate("&Save"))
+        self.saveButton.setShortcut("Ctrl+S")
+        self.saveButton.setToolTip('Save the changes to the file (Ctrl+S)')
+        self.saveButton.setFlat(True)
+        self.horizontalLayout.addWidget(self.saveButton)
         # add spacer
         spacerItem = QSpacerItem(515, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.horizontalLayout.addItem(spacerItem)
@@ -196,15 +206,37 @@ class Editor(QMainWindow):
         # add spacer
         spacerItem = QSpacerItem(515, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.horizontalLayout.addItem(spacerItem)
-        # add save button
-        self.saveButton = QPushButton(self)
-        self.saveButton.setObjectName("saveButton")
-        self.saveButton.clicked.connect(self.on_saveButton_clicked)
-        self.saveButton.setText(self._translate("&Save"))
-        self.saveButton.setShortcut("Ctrl+S")
-        self.saveButton.setToolTip('Save the changes to the file (Ctrl+S)')
-        self.saveButton.setFlat(True)
-        self.horizontalLayout.addWidget(self.saveButton)
+        # add graph button
+        self.graphButton = QPushButton(self)
+        self.graphButton.setObjectName("graphButton")
+        self.graphButton.toggled.connect(self.on_toggled_graph)
+        self.graphButton.setText("Includ&e Graph >>")
+        self.graphButton.setCheckable(True)
+        # self.graphButton.setIcon(QIcon(":/icons/button_graph.png"))
+        self.graphButton.setShortcut("Ctrl+E")
+        self.graphButton.setToolTip('Shows include and include from files (Ctrl+E)')
+        self.graphButton.setFlat(True)
+        self.horizontalLayout.addWidget(self.graphButton)
+        # add the search button
+        self.searchButton = QPushButton(self)
+        self.searchButton.setObjectName("searchButton")
+#        self.searchButton.clicked.connect(self.on_shortcut_find)
+        self.searchButton.toggled.connect(self.on_toggled_find)
+        self.searchButton.setText(self._translate("&Find >>"))
+        self.searchButton.setToolTip('Open a search dialog (Ctrl+F)')
+        self.searchButton.setFlat(True)
+        self.searchButton.setCheckable(True)
+        self.horizontalLayout.addWidget(self.searchButton)
+        # add the replace button
+        self.replaceButton = QPushButton(self)
+        self.replaceButton.setObjectName("replaceButton")
+#        self.replaceButton.clicked.connect(self.on_shortcut_replace)
+        self.replaceButton.toggled.connect(self.on_toggled_replace)
+        self.replaceButton.setText(self._translate("&Replace >>"))
+        self.replaceButton.setToolTip('Open a search&replace dialog (Ctrl+R)')
+        self.replaceButton.setFlat(True)
+        self.replaceButton.setCheckable(True)
+        self.horizontalLayout.addWidget(self.replaceButton)
         return self.buttons
 
     def keyPressEvent(self, event):
@@ -229,6 +261,16 @@ class Editor(QMainWindow):
                     self.on_toggled_replace(True)
             else:
                 self.replaceButton.setChecked(not self.replaceButton.isChecked())
+        elif event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_E:
+            if self.tabWidget.currentWidget().hasFocus():
+                if not self.graphButton.isChecked():
+                    self.graphButton.setChecked(True)
+                else:
+                    self.on_toggled_graph(True)
+            else:
+                self.graphButton.setChecked(not self.graphButton.isChecked())
+        elif event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_W:
+            self.on_close_tab(self.tabWidget.currentIndex())
         else:
             event.accept()
             QMainWindow.keyPressEvent(self, event)
@@ -251,7 +293,7 @@ class Editor(QMainWindow):
                 self.move(settings.value("pos", QPoint(0, 0)))
             try:
                 self.restoreState(settings.value("window_state"))
-            except:
+            except Exception:
                 import traceback
                 print traceback.format_exc()
             settings.endGroup()
@@ -266,7 +308,7 @@ class Editor(QMainWindow):
             settings.setValue("window_state", self.saveState())
             settings.endGroup()
 
-    def on_load_request(self, filename, search_text=''):
+    def on_load_request(self, filename, search_text='', insert_index=-1, goto_line=-1):
         '''
         Loads a file in a new tab or focus the tab, if the file is already open.
         @param filename: the path to file
@@ -282,7 +324,11 @@ class Editor(QMainWindow):
                 tab_name = self.__getTabName(filename)
                 editor = TextEdit(filename, self.tabWidget)
                 linenumber_editor = LineNumberWidget(editor)
-                tab_index = self.tabWidget.addTab(linenumber_editor, tab_name)
+                tab_index = 0
+                if insert_index > -1:
+                    tab_index = self.tabWidget.insertTab(insert_index, linenumber_editor, tab_name)
+                else:
+                    tab_index = self.tabWidget.addTab(linenumber_editor, tab_name)
                 self.files.append(filename)
                 editor.setCurrentPath(os.path.basename(filename))
                 editor.load_request_signal.connect(self.on_load_request)
@@ -298,7 +344,7 @@ class Editor(QMainWindow):
                     if self.tabWidget.widget(i).filename == filename:
                         self.tabWidget.setCurrentIndex(i)
                         break
-        except:
+        except Exception:
             import traceback
             rospy.logwarn("Error while open %s: %s", filename, traceback.format_exc(1))
         self.tabWidget.setUpdatesEnabled(True)
@@ -306,15 +352,33 @@ class Editor(QMainWindow):
             try:
                 self._search_thread.stop()
                 self._search_thread = None
-            except:
+            except Exception:
                 pass
             self._search_thread = TextSearchThread(search_text, filename, path_text=self.tabWidget.widget(0).document().toPlainText(), recursive=True)
             self._search_thread.search_result_signal.connect(self.on_search_result_on_open)
             self._search_thread.start()
+        if goto_line != -1:
+            self._goto(goto_line, True)
+        self.upperButton.setEnabled(self.tabWidget.count() > 1)
+
+    def on_graph_load_file(self, path, insert_after=True):
+        insert_index = self.tabWidget.currentIndex() + 1
+        if not insert_after:
+            insert_index = self.tabWidget.currentIndex()
+        self.on_load_request(path, insert_index=insert_index)
+
+    def on_graph_goto(self, path, linenr):
+        if path == self.tabWidget.currentWidget().filename:
+            if linenr != -1:
+                self._goto(linenr, True)
 
     def on_text_changed(self, value=""):
         if self.tabWidget.currentWidget().hasFocus():
             self.find_dialog.file_changed(self.tabWidget.currentWidget().filename)
+
+    def on_tab_changed(self, index):
+        if index > -1:
+            self.graph_view.set_file(self.tabWidget.widget(index).filename, self.tabWidget.widget(0).filename)
 
     def on_close_tab(self, tab_index):
         '''
@@ -327,10 +391,10 @@ class Editor(QMainWindow):
             w = self.tabWidget.widget(tab_index)
             if w.document().isModified():
                 name = self.__getTabName(w.filename)
-                result = QMessageBox.question(self, "Unsaved Changes", '\n\n'.join(["Save the file before closing?", name]), QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if result == QMessageBox.Yes:
+                result = MessageBox.question(self, "Unsaved Changes", '\n\n'.join(["Save the file before closing?", name]))
+                if result == MessageBox.Yes:
                     self.tabWidget.currentWidget().save()
-                elif result == QMessageBox.No:
+                elif result == MessageBox.No:
                     pass
                 else:
                     doremove = False
@@ -343,9 +407,10 @@ class Editor(QMainWindow):
                 # close editor, if no tabs are open
                 if not self.tabWidget.count():
                     self.close()
-        except:
+        except Exception:
             import traceback
             rospy.logwarn("Error while close tab %s: %s", str(tab_index), traceback.format_exc(1))
+        self.upperButton.setEnabled(self.tabWidget.count() > 1)
 
     def reject(self):
         if self.find_dialog.isVisible():
@@ -366,15 +431,16 @@ class Editor(QMainWindow):
         if changed:
             # ask the user for save changes
             if self.isHidden():
-                buttons = QMessageBox.Yes | QMessageBox.No
+                buttons = MessageBox.Yes | MessageBox.No
             else:
-                buttons = QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
-            result = QMessageBox.question(self, "Unsaved Changes", '\n\n'.join(["Save the file before closing?", '\n'.join(changed)]), buttons)
-            if result == QMessageBox.Yes:
+                buttons = MessageBox.Yes | MessageBox.No | MessageBox.Cancel
+            result = MessageBox.question(self, "Unsaved Changes", '\n\n'.join(["Save the file before closing?", '\n'.join(changed)]), buttons=buttons)
+            if result == MessageBox.Yes:
                 for i in range(self.tabWidget.count()):
                     w = self.tabWidget.widget(i).save()
+                self.graph_view.clear_cache()
                 event.accept()
-            elif result == QMessageBox.No:
+            elif result == MessageBox.No:
                 event.accept()
             else:
                 event.ignore()
@@ -409,6 +475,13 @@ class Editor(QMainWindow):
     # HANDLER for buttons
     ##############################################################################
 
+    def on_upperButton_clicked(self):
+        '''
+        Opens the file which include the current open file
+        '''
+        if self.tabWidget.currentIndex() != 0:
+            self.graph_view.find_parent_file()
+
     def on_saveButton_clicked(self):
         '''
         Saves the current document. This method is called if the C{save button}
@@ -416,15 +489,27 @@ class Editor(QMainWindow):
         '''
         saved, errors, msg = self.tabWidget.currentWidget().save(True)
         if errors:
-            QMessageBox.critical(self, "Error", msg)
+            MessageBox.critical(self, "Error", msg)
             self.tabWidget.setTabIcon(self.tabWidget.currentIndex(), self._error_icon)
             self.tabWidget.setTabToolTip(self.tabWidget.currentIndex(), msg)
         elif saved:
             self.tabWidget.setTabIcon(self.tabWidget.currentIndex(), self._empty_icon)
             self.tabWidget.setTabToolTip(self.tabWidget.currentIndex(), '')
+            self.graph_view.clear_cache()
 
     def on_shortcut_find(self):
         pass
+
+    def on_toggled_graph(self, value):
+        '''
+        Shows the search frame
+        '''
+        if value:
+            self.graph_view.enable()
+        else:
+            # self.replaceButton.setChecked(False)
+            self.graph_view.setVisible(False)
+            self.tabWidget.currentWidget().setFocus()
 
     def on_toggled_find(self, value):
         '''
@@ -454,18 +539,23 @@ class Editor(QMainWindow):
         try:
             value, ok = QInputDialog.getInt(self, "Goto", self.tr("Line number:"),
                                                   QLineEdit.Normal, minValue=1, step=1)
-        except:
+        except Exception:
             value, ok = QInputDialog.getInt(self, "Goto", self.tr("Line number:"),
                                                   QLineEdit.Normal, min=1, step=1)
         if ok:
-            if value > self.tabWidget.currentWidget().document().blockCount():
-                value = self.tabWidget.currentWidget().document().blockCount()
+            self._goto(value)
+        self.tabWidget.currentWidget().setFocus(Qt.ActiveWindowFocusReason)
+
+    def _goto(self, linenr, select_line=True):
+            if linenr > self.tabWidget.currentWidget().document().blockCount():
+                linenr = self.tabWidget.currentWidget().document().blockCount()
             curpos = self.tabWidget.currentWidget().textCursor().blockNumber() + 1
-            while curpos != value:
-                mov = QTextCursor.NextBlock if curpos < value else QTextCursor.PreviousBlock
+            while curpos != linenr:
+                mov = QTextCursor.NextBlock if curpos < linenr else QTextCursor.PreviousBlock
                 self.tabWidget.currentWidget().moveCursor(mov)
                 curpos = self.tabWidget.currentWidget().textCursor().blockNumber() + 1
-        self.tabWidget.currentWidget().setFocus(Qt.ActiveWindowFocusReason)
+            self.tabWidget.currentWidget().moveCursor(QTextCursor.EndOfBlock)
+            self.tabWidget.currentWidget().moveCursor(QTextCursor.StartOfBlock, QTextCursor.KeepAnchor)
 
     ##############################################################################
     # SLOTS for search dialog
@@ -620,7 +710,7 @@ class Editor(QMainWindow):
         dia = PackageDialog()
         if dia.exec_():
             self._insert_text('<node name="%s" pkg="%s" type="%s"\n'
-                              '      args="arg1" machine="machine-name"\n'
+                              '      args="arg1" machine="machine_name"\n'
                               '      respawn="true" required="true"\n'
                               '      ns="foo" clear_params="true|false"\n'
                               '      output="log|screen" cwd="ROS_HOME|node"\n'
