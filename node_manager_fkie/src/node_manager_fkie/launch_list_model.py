@@ -32,17 +32,17 @@
 
 from python_qt_binding.QtCore import QMimeData, Qt
 try:
-    from python_qt_binding.QtGui import QApplication, QInputDialog, QLineEdit, QMessageBox
+    from python_qt_binding.QtGui import QApplication, QInputDialog, QLineEdit
 except:
-    from python_qt_binding.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox
+    from python_qt_binding.QtWidgets import QApplication, QInputDialog, QLineEdit
 from python_qt_binding.QtGui import QIcon, QStandardItem, QStandardItemModel
 import os
 import shutil
 
 import node_manager_fkie as nm
 
-from .common import is_package, package_name
-from .detailed_msg_box import WarningMessageBox
+from .common import is_package, package_name, utf8
+from .detailed_msg_box import MessageBox
 from .packages_thread import PackagesThread
 
 
@@ -141,8 +141,8 @@ class LaunchItem(QStandardItem):
                     self.name = value
                     self.path = new_path
                 else:
-                    WarningMessageBox(QMessageBox.Warning, "Path already exists",
-                                      "`%s` already exists!" % value, "Complete path: %s" % new_path).exec_()
+                    MessageBox.warning(self, "Path already exists",
+                                       "`%s` already exists!" % value, "Complete path: %s" % new_path)
         return QStandardItem.setData(self, value, role)
 
     @classmethod
@@ -253,7 +253,7 @@ class LaunchListModel(QStandardItemModel):
                 item = self.itemFromIndex(index)
                 prev = '%s\n' % text if text else ''
                 text = '%sfile://%s' % (prev, item.path)
-        mimeData.setData('text/plain', str(text))
+        mimeData.setData('text/plain', text)
         return mimeData
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -374,7 +374,7 @@ class LaunchListModel(QStandardItemModel):
                 item = self.itemFromIndex(index)
                 prev = '%s\n' % text if text else ''
                 text = '%sfile://%s' % (prev, item.path)
-        mimeData.setData('text/plain', str(text))
+        mimeData.setData('text/plain', utf8(text))
         QApplication.clipboard().setMimeData(mimeData)
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
