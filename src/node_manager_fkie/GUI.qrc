@@ -42,6 +42,7 @@
     <file>icons/crystal_clear_start_sync.png</file>
     <file>icons/crystal_clear_sync.png</file>
     <file>icons/crystal_clear_user.png</file>
+    <file>icons/crystal_clear_warning_56.png</file>
     <file>icons/crystal_clear_warning.png</file>
     <file>icons/crystal_clear_xclock.png</file>
     <file>icons/crystal_clear_xclock_fail.png</file>
@@ -66,6 +67,7 @@
     <file>icons/sekkyumu_play_alt_24.png</file>
     <file>icons/sekkyumu_restart.png</file>
     <file>icons/sekkyumu_restart_24.png</file>
+    <file>icons/sekkyumu_restart_g_24.png</file>
     <file>icons/sekkyumu_start_athost_24.png</file>
     <file>icons/sekkyumu_stop.png</file>
     <file>icons/sekkyumu_topic_echo.png</file>
@@ -95,14 +97,6 @@
     <file>icons/stock_connect_yellow.png</file>
     <file>icons/stock_connect_red.png</file>
     <file>icons/stock_disconnect.png</file>
-  </qresource>
-  <qresource prefix="forms">
-    <file>LaunchFilesDockWidget.ui</file>
-    <file>LogDockWidget.ui</file>
-    <file>MainWindow.ui</file>
-    <file>MasterTab.ui</file>
-    <file>PasswordInput.ui</file>
-    <file>ProfileWidget.ui</file>
-    <file>SettingsDockWidget.ui</file>
+    <file>icons/up.png</file>
   </qresource>
 </RCC>
