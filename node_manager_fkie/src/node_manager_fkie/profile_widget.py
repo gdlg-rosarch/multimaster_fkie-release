@@ -32,9 +32,9 @@
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
 try:
-    from python_qt_binding.QtGui import QDockWidget, QFileDialog, QMessageBox
+    from python_qt_binding.QtGui import QDockWidget, QFileDialog
 except:
-    from python_qt_binding.QtWidgets import QDockWidget, QFileDialog, QMessageBox
+    from python_qt_binding.QtWidgets import QDockWidget, QFileDialog
 import os
 import roslib
 import rospy
@@ -42,8 +42,8 @@ import uuid
 from master_discovery_fkie.common import get_hostname, resolve_url
 
 import node_manager_fkie as nm
-from .common import get_rosparam, delete_rosparam, package_name, to_url
-from .detailed_msg_box import WarningMessageBox
+from .common import get_rosparam, delete_rosparam, package_name, to_url, utf8
+from .detailed_msg_box import MessageBox
 
 
 class ProfileWidget(QDockWidget):
@@ -76,15 +76,15 @@ class ProfileWidget(QDockWidget):
             try:
                 (pkg, _) = package_name(os.path.dirname(path))  # _:=pkg_path
                 if pkg is None:
-                    ret = WarningMessageBox(QMessageBox.Warning, "New File Error",
-                                            'The new file is not in a ROS package', buttons=QMessageBox.Ok | QMessageBox.Cancel).exec_()
-                    if ret == QMessageBox.Cancel:
+                    ret = MessageBox.warning(self, "New File Error",
+                                             'The new file is not in a ROS package', buttons=MessageBox.Ok | MessageBox.Cancel)
+                    if ret == MessageBox.Cancel:
                         return None
                 return path
             except EnvironmentError as e:
-                WarningMessageBox(QMessageBox.Warning, "New File Error",
-                                  'Error while create a new file',
-                                  str(e)).exec_()
+                MessageBox.warning(self, "New File Error",
+                                   'Error while create a new file',
+                                   utf8(e))
         return None
 
     def on_save_profile(self, masteruri='', path=None):
@@ -171,9 +171,10 @@ class ProfileWidget(QDockWidget):
                 f.write(text)
         except Exception as e:
             import traceback
-            print traceback.format_exc(3)
-            WarningMessageBox(QMessageBox.Warning, "Save profile Error",
-                              'Error while save profile', str(e)).exec_()
+            print utf8(traceback.format_exc(3))
+            MessageBox.warning(self, "Save profile Error",
+                               'Error while save profile',
+                               utf8(e))
 
     def on_load_profile_file(self, path):
         '''
@@ -275,14 +276,14 @@ class ProfileWidget(QDockWidget):
                                     master.start_nodes_by_name(list(nodes), cfg, force_start)
                         except Exception as ml:
                             import traceback
-                            print traceback.format_exc(1)
-                            rospy.logwarn("Can not load launch file for %s: %s" % (muri, ml))
+                            print utf8(traceback.format_exc(1))
+                            rospy.logwarn("Can not load launch file for %s: %s" % (muri, utf8(ml)))
             except Exception as e:
                 import traceback
                 print traceback.format_exc(1)
-                WarningMessageBox(QMessageBox.Warning, "Load profile error",
-                                  'Error while load profile',
-                                  str(e)).exec_()
+                MessageBox.warning(self, "Load profile error",
+                                   'Error while load profile',
+                                   utf8(e))
             if not hasstart:
                 self.update_progress()
             else:
@@ -309,9 +310,9 @@ class ProfileWidget(QDockWidget):
     def closeEvent(self, event):
         rospy.loginfo("Cancel profile loading...")
         QDockWidget.closeEvent(self, event)
-        ret = WarningMessageBox(QMessageBox.Warning, "Cancel Start?",
-                                'This stops all starting queues!', buttons=QMessageBox.Ok | QMessageBox.Cancel).exec_()
-        if ret == QMessageBox.Cancel:
+        ret = MessageBox.warning(self, "Cancel Start?",
+                                 'This stops all starting queues!', buttons=MessageBox.Ok | MessageBox.Cancel)
+        if ret == MessageBox.Cancel:
             return None
         self._main_window._progress_queue.stop()
         self._main_window.launch_dock.progress_queue.stop()
@@ -342,10 +343,10 @@ class ProfileWidget(QDockWidget):
                 delete_rosparam(binary, master.masteruri)
                 for pname, pval in cfg.items():
                     args.append('_%s:=%s' % (pname, pval))
-                self._main_window._progress_queue.add2queue(str(uuid.uuid4()),
+                self._main_window._progress_queue.add2queue(utf8(uuid.uuid4()),
                                                'start %s on %s' % (binary, hostname),
                                                nm.starter().runNodeWithoutConfig,
-                                               (str(hostname), pkg, str(binary), str(binary), args, master.masteruri, False, usr))
+                                               (utf8(hostname), pkg, utf8(binary), utf8(binary), args, master.masteruri, False, usr))
                 self._main_window._progress_queue.start()
         except Exception as me:
-            rospy.logwarn("Can not start %s for %s: %s" % (binary, master.masteruri, me))
+            rospy.logwarn("Can not start %s for %s: %s" % (binary, master.masteruri, utf8(me)))
